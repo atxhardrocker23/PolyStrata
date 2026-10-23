@@ -1,5 +1,13 @@
 // src/poly/engine.cpp - see the header.  What every architecture shares: the files, the weights' way to VRAM, the
 // routed experts (the cache, the CPU, a prompt batch), the sequence's state, and the calls that feed tokens.
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#undef min
+#undef max
+#endif
+
 #include "engine.hpp"
 
 #include "deepseek4.hpp"
@@ -2285,15 +2293,6 @@ bool Engine::moe(Layer& L, int il, int n, const std::function<void()>* first) {
             }
             n_host = kept;
         } else if (m > 1 && opt_.tail_skip > 0) {
-            int kept = 0;
-            for (int i = 0; i < n_host; ++i) {
-                bool low = true;
-                for (int j = 0; j < n_host && low; ++j) low = host_e[j] != host_e[i] || host_k[j] >= opt_.tail_skip;
-                if (low) ++stats_.tail_experts;
-                else host[kept++] = host[i];
-            }
-            n_host = kept;
-        }
             int kept = 0;
             for (int i = 0; i < n_host; ++i) {
                 bool low = true;
