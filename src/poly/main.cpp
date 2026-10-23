@@ -39,6 +39,8 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <timeapi.h>
+#pragma comment(lib, "winmm.lib")
 #undef far   // a word of this file's
 #endif
 
@@ -1123,6 +1125,12 @@ void no_power_throttling() {
 }
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+    struct TimerPeriodScope {
+        TimerPeriodScope() { timeBeginPeriod(1); }
+        ~TimerPeriodScope() { timeEndPeriod(1); }
+    } timer_scope;
+#endif
     no_power_throttling();
     Options o;
     CacheFlags cache;

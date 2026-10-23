@@ -25,6 +25,7 @@
 #include "strata/kernels/native_router.hpp"
 #include "strata/prefill/gemm.hpp"
 #include "strata/prefill/moe_mmq.hpp"
+#include "strata/platform/memory.hpp"
 #include "strata/qwen35/engine.hpp"
 #include "q36_kernels.cuh"
 #if defined(STRATA_Q36_CPU_POOL)
@@ -2919,6 +2920,22 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
     for (Layer* L : all)
         if (!mtp_only || L == &m.mtp) host += L->stride * (size_t) ne + kMmqTail;
     uint8_t* arena = nullptr;
+#if defined(_WIN32)
+    arena = (uint8_t*) VirtualAlloc(NULL, host, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!arena) {
+        err = "VirtualAlloc failed for " + std::to_string(host >> 20) + " MiB";
+        return false;
+    }
+    strata::platform::lock_resident(arena, (uint64_t) host);
+    constexpr size_t kPinChunk = 512ULL << 20;
+    for (size_t poff = 0; poff < host; poff += kPinChunk) {
+        size_t cur = std::min(kPinChunk, host - poff);
+        if (cudaHostRegister(arena + poff, cur, cudaHostRegisterPortable) != cudaSuccess) {
+            cudaGetLastError();
+            break;
+        }
+    }
+#else
     bool pinned = cudaHostAlloc((void**) &arena, host, cudaHostAllocDefault) == cudaSuccess;
     if (!pinned) {
         (void) cudaGetLastError();
@@ -2928,6 +2945,7 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
             return false;
         }
     }
+#endif
     size_t off = 0;
     E.hy.resize(all.size());
     for (size_t li = 0; li < all.size(); ++li) {

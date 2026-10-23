@@ -861,8 +861,15 @@ class StrataEngine:
             pin["preexec_fn"] = lambda: os.sched_setaffinity(0, cpus)
         spawned_at = time.monotonic()
         self.proc = popen("the PolyStrata engine", [exe, "--serve", *args], cwd=cwd, stdin=subprocess.PIPE,
-                          stdout=subprocess.PIPE, stderr=self.log, text=True, encoding="utf-8", bufsize=1, env=env, **pin)
+                          stdout=subprocess.PIPE, stderr=self.log, text=True, encoding="utf-8", bufsize=65536, env=env, **pin)
         contain(self.proc)                               # ends with the server, however it ends (Windows)
+        if os.name == "nt" and self.proc and self.proc.pid:
+            try:
+                import psutil
+                aff = list(cpus) if cpus else [0, 2, 4, 6, 8, 10]
+                psutil.Process(self.proc.pid).cpu_affinity(aff)
+            except Exception:
+                pass
         # the READY read has a timeout (#1317): the lines come from a thread, up to READY, so the rest of the stream
         # stays for _pump (one reader at a time)
         ready_q: queue.Queue = queue.Queue()
@@ -2054,7 +2061,13 @@ class StrataEngine:
                     return
                 elif line.startswith("ERR"):
                     done = True
-                    raise ValueError(line[4:].strip())
+                    err_msg = line[4:].strip()
+                    if "illegal memory access" in err_msg or "cudaError" in err_msg:
+                        try:
+                            self.proc.terminate()
+                        except Exception:
+                            pass
+                    raise ValueError(err_msg)
         finally:
             if not done:                                  # the consumer stopped early: stop the engine, drain to DONE
                 if self.can_stop:

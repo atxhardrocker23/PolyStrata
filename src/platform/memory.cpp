@@ -2,6 +2,9 @@
 #include "strata/platform/memory.hpp"
 
 #if defined(_WIN32)
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0602
+#endif
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -157,8 +160,22 @@ uint64_t total_physical_memory() {
     return GlobalMemoryStatusEx(&ms) ? (uint64_t) ms.ullTotalPhys : 0;
 }
 
-bool read_ahead_enabled() { return false; }
-void advise_willneed(const void*, uint64_t) {}
+bool read_ahead_enabled() {
+    static const bool on = [] {
+        const char* v = std::getenv("STRATA_READ_AHEAD");
+        return v == nullptr || std::atoi(v) != 0;
+    }();
+    return on;
+}
+
+void advise_willneed(const void* p, uint64_t bytes) {
+    if (p == nullptr || bytes == 0 || !read_ahead_enabled()) return;
+    WIN32_MEMORY_RANGE_ENTRY entry;
+    entry.VirtualAddress = const_cast<void*>(p);
+    entry.NumberOfBytes = (SIZE_T) bytes;
+    PrefetchVirtualMemory(GetCurrentProcess(), 1, &entry, 0);
+}
+
 void advise_willneed(int, uint64_t, uint64_t) {}
 #else
 LockResult lock_resident(void* p, uint64_t bytes) {

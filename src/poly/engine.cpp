@@ -11,6 +11,7 @@
 #include "runtime.hpp"
 #include "strata/poly/kernels.hpp"
 #include "strata/kernels/native_mmvq.hpp"
+#include "strata/platform/memory.hpp"
 
 #include "ggml.h"
 
@@ -160,6 +161,10 @@ int stay_near(const std::vector<std::pair<const uint8_t*, size_t>>& spans, const
 // model that the file cache holds take it 4 s.  What the cache does not hold is read from the disk here, not
 // while a token waits.
 void map_pages(const std::vector<std::pair<const uint8_t*, size_t>>& spans, const std::atomic<bool>& quit) {
+    for (const auto& s : spans) {
+        if (quit.load(std::memory_order_relaxed)) return;
+        strata::platform::advise_willneed(s.first, (uint64_t) s.second);
+    }
     constexpr size_t kPage = 4096, kLook = size_t(1) << 24;   // `quit` is looked at every 16 MiB
     volatile uint8_t seen = 0;
     for (const auto& s : spans) {
@@ -1335,12 +1340,14 @@ bool Engine::mind_card_vram() {
     size_t free_b = 0, total_b = 0;
     ck(cudaMemGetInfo(&free_b, &total_b), "cudaMemGetInfo");
     const int64_t free = (int64_t) (free_b >> 20);   // this card's
-    if (!vmm_) {   // a cache in one allocation is filled again
-        if (free >= reserve_mib_ / 4) return false;
+    if (minds_++ == 0) return false;   // nothing is recorded before the first request
+    if (!vmm_) {   // a cache in one allocation (--kv-whole already holds all KV + graphs; only shrink if below 64 MiB)
+        if (free >= 64) return false;
+        const size_t cut = size_t(std::max<int64_t>(128 - free, 64)) << 20;
+        full_bytes_ = exp_at_ > cut ? exp_at_ - cut : 0;
         resize_card_cache(opt_.vram_reserve_mib);
         return true;
     }
-    if (minds_++ == 0) return false;   // nothing is recorded before the first request
     const int64_t keep = opt_.vram_reserve_mib >= 0 || ram_tight_ ? reserve_mib_ : std::max(reserve_mib_ / 2, 128);
     if (free < keep / 2) {
         shrink_cache(size_t(keep - free) << 20);
@@ -1799,6 +1806,14 @@ void Engine::load(const Options& o) {
         if (L.gu_stride == L.gu_bytes) spans.emplace_back(L.exp_up, (size_t) n_expert_ * L.gu_bytes);
         spans.emplace_back(L.exp_down, (size_t) n_expert_ * L.d_bytes);
     }
+#if defined(_WIN32)
+    std::vector<std::pair<void*, uint64_t>> lock_spans;
+    lock_spans.reserve(spans.size());
+    for (const auto& s : spans) {
+        lock_spans.emplace_back((void*) s.first, (uint64_t) s.second);
+    }
+    strata::platform::lock_resident_ranges(lock_spans);
+#endif
     if (!workers_) {   // a later card's engine has the first one's
         if (opt_.stay_near) {   // before any thread that reads the experts is started
             std::vector<std::string> files = gg_->paths();
@@ -2179,6 +2194,22 @@ void Engine::lin(const Dev& w, const float* x, float* y, int n, const void* xq, 
                              y + (size_t) at * w.n_out, w.n_in, w.n_out, std::min(8, n - at), st_);
 }
 
+void Engine::lin2(const Dev& a, float* ya, const Dev& b, float* yb, const float* x, int n, const void* xq) {
+    if (n == 1 && xq && a.type == b.type && a.n_in == b.n_in && a.n_out == b.n_out &&
+        a.type != kTypeF32 && a.type != kTypeBF16) {
+        kernels::MmvqSlots slots{};
+        slots.w[0] = a.p;
+        slots.x[0] = xq;
+        slots.y[0] = ya;
+        slots.w[1] = b.p;
+        slots.x[1] = xq;
+        slots.y[1] = yb;
+        if (kernels::native_mmvq_slots((int) a.type, slots, 2, a.n_in, a.n_out, st_)) return;
+    }
+    lin(a, x, ya, n, xq);
+    lin(b, x, yb, n, xq);
+}
+
 void Engine::router_scores(const Layer& L, int n) { lin(L.gate_inp, xn_, rl_, n, xq_); }
 
 bool Engine::batched(const Layer& L, int n) const { return mmq_ && L.mmq && n >= kStageRows; }
@@ -2229,6 +2260,10 @@ bool Engine::moe(Layer& L, int il, int n, const std::function<void()>* first) {
                     cached[n_cached++] = {s, w[k], at + t};
                     continue;
                 }
+                if (m == 1 && opt_.tail_skip > 0 && k >= opt_.tail_skip) {
+                    ++stats_.tail_experts;
+                    continue;
+                }
                 host_e[n_host] = (int32_t) e;
                 host_k[n_host] = k;
                 host[n_host++] = {L.exp_gate + e * L.gu_stride, L.exp_up + e * L.gu_stride,
@@ -2249,7 +2284,16 @@ bool Engine::moe(Layer& L, int il, int n, const std::function<void()>* first) {
                 else host[kept++] = host[i];
             }
             n_host = kept;
-        } else if (opt_.tail_skip > 0) {
+        } else if (m > 1 && opt_.tail_skip > 0) {
+            int kept = 0;
+            for (int i = 0; i < n_host; ++i) {
+                bool low = true;
+                for (int j = 0; j < n_host && low; ++j) low = host_e[j] != host_e[i] || host_k[j] >= opt_.tail_skip;
+                if (low) ++stats_.tail_experts;
+                else host[kept++] = host[i];
+            }
+            n_host = kept;
+        }
             int kept = 0;
             for (int i = 0; i < n_host; ++i) {
                 bool low = true;
@@ -2383,19 +2427,29 @@ void Engine::stage(const Layer& L, const int32_t* experts, int m, void* stream, 
     staged_il_ = -1;   // whatever the buffer held
     const size_t gu2 = 2 * L.gu_bytes, down_at = pad((size_t) m * gu2);
     const int per = (int) (chunk_bytes_ / (gu2 + L.d_bytes));
+    const bool gu_contig = L.exp_up == L.exp_gate + L.gu_bytes;
     for (int j0 = 0; j0 < m; j0 += per) {
         const size_t c = (size_t) std::min(per, m - j0);
         stage_turn_ ^= 1;
         uint8_t* h = h_stage_[stage_turn_];
         const cudaEvent_t left = (cudaEvent_t) ev_stage_[stage_turn_];
         ck(cudaEventSynchronize(left), "expert staging");
-        const auto copy = [&](int i) {
-            const size_t j = (size_t) i / 3, e = (size_t) experts[(size_t) j0 + j];
-            if (i % 3 == 0) std::memcpy(h + j * gu2, L.exp_gate + e * L.gu_stride, L.gu_bytes);
-            else if (i % 3 == 1) std::memcpy(h + j * gu2 + L.gu_bytes, L.exp_up + e * L.gu_stride, L.gu_bytes);
-            else std::memcpy(h + c * gu2 + j * L.d_bytes, L.exp_down + e * L.d_bytes, L.d_bytes);
-        };
-        (alone ? *stagers_ : *workers_).run((int) (3 * c), copy);
+        if (gu_contig) {
+            const auto copy2_gu = [&](int i) {
+                const size_t j = (size_t) i / 2, e = (size_t) experts[(size_t) j0 + j];
+                if (i % 2 == 0) std::memcpy(h + j * gu2, L.exp_gate + e * L.gu_stride, gu2);
+                else std::memcpy(h + c * gu2 + j * L.d_bytes, L.exp_down + e * L.d_bytes, L.d_bytes);
+            };
+            (alone ? *stagers_ : *workers_).run((int) (2 * c), copy2_gu);
+        } else {
+            const auto copy = [&](int i) {
+                const size_t j = (size_t) i / 3, e = (size_t) experts[(size_t) j0 + j];
+                if (i % 3 == 0) std::memcpy(h + j * gu2, L.exp_gate + e * L.gu_stride, L.gu_bytes);
+                else if (i % 3 == 1) std::memcpy(h + j * gu2 + L.gu_bytes, L.exp_up + e * L.gu_stride, L.gu_bytes);
+                else std::memcpy(h + c * gu2 + j * L.d_bytes, L.exp_down + e * L.d_bytes, L.d_bytes);
+            };
+            (alone ? *stagers_ : *workers_).run((int) (3 * c), copy);
+        }
         ck(cudaMemcpyAsync(stage_ + (size_t) j0 * gu2, h, c * gu2, cudaMemcpyHostToDevice, cs(stream)),
            "expert staging");
         ck(cudaMemcpyAsync(stage_ + down_at + (size_t) j0 * L.d_bytes, h + c * gu2, c * L.d_bytes,
@@ -3219,7 +3273,7 @@ bool Engine::read(const int32_t* tokens, int n, const Mark* marks, int n_marks,
         share = [&, to](int done, int of) { return (*asked)(lo_ * of + done * (to - lo_), n_layer_ * of); };
         return (const std::function<bool(int, int)>*) &share;
     };
-    if (n_calls == 1 || !mmq_ || all_cached() || n < opt_.stage_ahead) {
+    if (!next_ || n_calls == 1 || !mmq_ || all_cached() || n < opt_.stage_ahead) {
         turn = share_to(n_layer_);   // eval() takes the calls through the cards after this one
         // On several cards the next one takes a call on a thread of its own, while this one runs the call after
         // it.  Each card runs the calls as eval() does, in the same order.
@@ -3254,6 +3308,7 @@ bool Engine::read(const int32_t* tokens, int n, const Mark* marks, int n_marks,
         throw std::runtime_error("the context is full (" + std::to_string(opt_.max_context) + " tokens)");
 
     ck(cudaStreamSynchronize(cs(st_)), "read");
+    if (rs_) ck(cudaStreamSynchronize(cs(rs_)), "read");
     if (n_swap_ > 0) follow(0);
     const size_t e_row = (size_t) n_embd_, r_row = (size_t) streams() * e_row, r_bytes = r_row * sizeof(float);
     const size_t part = (size_t) std::max(streams(), draft_ ? 3 : 1) * rows_ * e_row;   // a call's rows of r_
@@ -3263,6 +3318,7 @@ bool Engine::read(const int32_t* tokens, int n, const Mark* marks, int n_marks,
     const bool host = n_calls > 2;
     if (host && h_res_rows_ < n) {   // for this read's tokens and some more, so that a longer one seldom asks again
         if (h_res_) {
+            if (rs_) ck(cudaStreamSynchronize(cs(rs_)), "read");
             host_allocs_.erase(std::find(host_allocs_.begin(), host_allocs_.end(), (void*) h_res_));
             ck(cudaFreeHost(h_res_), "freeing pinned memory");
             h_res_ = nullptr;
@@ -3522,8 +3578,8 @@ float* Engine::draft_input(const int32_t* tokens, int64_t row, const float* h, i
     rms_norm(h, fp(d_hnorm_), r_ + e, n_embd_, n, rms_eps_, st_, 2 * n_embd_);
     float* x = r_ + 2 * rows * e;
     lin(d_proj_, r_, x, n);
-    rms_norm(x, fp(layers_[(size_t) n_layer_].attn_norm), xn_, n_embd_, n, rms_eps_, st_);
-    kernels::native_quantize_q8_1(xn_, xq_, n_embd_ * n, 1, st_);
+    kernels::native_add_rms_norm_q8_1(x, nullptr, fp(layers_[(size_t) n_layer_].attn_norm), xn_, xq_, n_embd_, n,
+                                      rms_eps_, sum_threads(n_embd_), st_);
     return x;
 }
 
@@ -3548,19 +3604,17 @@ void Engine::draft_step(int32_t token, int i) {
     float* own = hn_ + n_embd_;   // the block's output, which stands in for the model's from the second guess on
     float* x = draft_input(&token, pos_ + i, i == 0 ? hn_ : own, 1);
     block_attend(pos_ + i, 1);
-    axpy(ao_, 1.f, x, n_embd_, true, st_);
-    rms_norm(x, fp(L.ffn_norm), xn_, n_embd_, 1, rms_eps_, st_);
-    kernels::native_quantize_q8_1(xn_, xq_, n_embd_, 1, st_);
+    const int threads = sum_threads(n_embd_);
+    kernels::native_add_rms_norm_q8_1(x, ao_, fp(L.ffn_norm), xn_, xq_, n_embd_, 1, rms_eps_, threads, st_);
     moe_router(L, 1);
     ck(cudaEventRecord((cudaEvent_t) ev_, cs(st_)), "router");
     moe_shared(L, n_layer_, 1);
     tok_ = nullptr;   // a guess's row has no token of the sequence
     if (moe(L, n_layer_, 1)) moe_add(1);
-    axpy(fo_, 1.f, x, n_embd_, true, st_);
-    rms_norm(x, fp(d_head_), own, n_embd_, 1, rms_eps_, st_);
+    kernels::native_add_rms_norm_q8_1(x, fo_, fp(d_head_), own, q8_, n_embd_, 1, rms_eps_, threads, st_);
     Dev head = output_;   // the matrix's first rows are the common tokens'
     head.n_out = draft_rows();
-    lin(head, own, logits_, 1);
+    lin(head, own, logits_, 1, q8_);
     finish_logits(logits_, 1);
 }
 

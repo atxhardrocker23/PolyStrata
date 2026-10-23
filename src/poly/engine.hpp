@@ -458,6 +458,7 @@ protected:
     const Image* image_at(int64_t row) const;
     bool input(int32_t token, int64_t row, float* dst) const;
     void lin(const Dev& w, const float* x, float* y, int n, const void* xq = nullptr, int rows_per_x = 0);
+    void lin2(const Dev& a, float* ya, const Dev& b, float* yb, const float* x, int n, const void* xq = nullptr);
     void fill_expert_cache();
     void start_swaps();
     void plan_ahead(Layer& L, int il);

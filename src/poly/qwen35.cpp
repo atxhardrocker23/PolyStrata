@@ -317,8 +317,7 @@ void Qwen35::load_card_rows(const uint8_t* src, int64_t from, int64_t count, int
 void Qwen35::gdn(Block& B, int n) {
     lin(B.wqkv, xn_, proj_, n, xq_);
     lin(B.wz, xn_, z_, n, xq_);
-    lin(B.alpha, xn_, alpha_, n, xq_);
-    lin(B.beta, xn_, beta_, n, xq_);
+    lin2(B.alpha, alpha_, B.beta, beta_, xn_, n, xq_);
     if (rows_of_) {   // step(): each row with its own sequence's convolution and state
         for (int i = 0; i < n; ++i) {
             const int s = rows_of_[i].seq;
@@ -508,16 +507,14 @@ void Qwen35::attn_rows(Block& B, int n) {
 // A layer from its input to its router's copy.  A prompt batch's MoE (moe_rows) does its own routing.
 void Qwen35::layer_head(Layer& L, int il, int n) {
     Block& B = blocks_[(size_t) il];
-    rms_norm(r_, fp(L.attn_norm), xn_, n_embd_, n, rms_eps_, st_);
-    kernels::native_quantize_q8_1(xn_, xq_, n_embd_ * n, 1, st_);
+    const int threads = sum_threads(n_embd_);
+    kernels::native_add_rms_norm_q8_1(r_, nullptr, fp(L.attn_norm), xn_, xq_, n_embd_, n, rms_eps_, threads, st_);
     dbg("attn_in", il, xn_, n_embd_);
     if (B.gdn) gdn(B, n);
     else attn(B, pos_, n);
     dbg("attn", il, ao_, n_embd_);
-    axpy(ao_, 1.f, r_, n * n_embd_, true, st_);
 
-    rms_norm(r_, fp(L.ffn_norm), xn_, n_embd_, n, rms_eps_, st_);
-    kernels::native_quantize_q8_1(xn_, xq_, n_embd_ * n, 1, st_);
+    kernels::native_add_rms_norm_q8_1(r_, ao_, fp(L.ffn_norm), xn_, xq_, n_embd_, n, rms_eps_, threads, st_);
     dbg("ffn_in", il, xn_, n_embd_);
     if (!batched(L, n)) moe_router(L, n);
 }
@@ -557,8 +554,7 @@ bool Qwen35::route_card(int, int n, int32_t* ids, float* w) {
 
 // The shared expert, times the sigmoid of its own gate.  It runs on the GPU while the host routes.
 void Qwen35::moe_shared(const Layer& L, int il, int n) {
-    lin(L.sh_gate, xn_, g_, n, xq_);
-    lin(L.sh_up, xn_, u_, n, xq_);
+    lin2(L.sh_gate, g_, L.sh_up, u_, xn_, n, xq_);
     swiglu_clamp(g_, u_, h_, n * n_ff_shexp_, clamp_shexp_[(size_t) il], st_);
     lin(L.sh_down, h_, fo_, n);
     lin(blocks_[(size_t) il].sh_gate_inp, xn_, sg_, n);
