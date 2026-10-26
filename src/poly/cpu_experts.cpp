@@ -516,6 +516,151 @@ void q6k_down_4rows(const block_q6_K* x0, const block_q6_K* x1, const block_q6_K
     for (int k = 0; k < 4; ++k) res[k] = hsum_float_8(acc[k]);
 }
 
+// Fused 4-row single-token Q5_K x Q8_K dot product (also used for 2-row gate+up), bit-exact with ggml_vec_dot_q5_K_q8_K.
+void q5k_down_4rows(const block_q5_K* x0, const block_q5_K* x1, const block_q5_K* x2, const block_q5_K* x3,
+                    int nb, const block_q8_K* y, float* res) {
+    static const uint32_t kmask1 = 0x3f3f3f3f, kmask2 = 0x0f0f0f0f, kmask3 = 0x03030303;
+    const __m256i m4 = _mm256_set1_epi8(0xF);
+    const __m128i mzero = _mm_setzero_si128();
+    const __m256i mone = _mm256_set1_epi8(1);
+    const block_q5_K* xs[4] = {x0, x1, x2, x3};
+    __m256 acc[4] = {_mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps()};
+    float summs[4] = {0.f, 0.f, 0.f, 0.f};
+    for (int i = 0; i < nb; ++i) {
+        const float yd = y[i].d;
+        const __m256i q8sums = _mm256_loadu_si256((const __m256i*) y[i].bsums);
+        const __m128i q8s = _mm_hadd_epi16(_mm256_extracti128_si256(q8sums, 0), _mm256_extracti128_si256(q8sums, 1));
+        __m256i scales[4], hbits[4], hmask[4], sumi[4];
+        const uint8_t* q5[4];
+        for (int k = 0; k < 4; ++k) {
+            const block_q5_K& b = xs[k][i];
+            const float dmin = -yd * half_at(&b, 1);
+            uint32_t utmp[4];
+            std::memcpy(utmp, b.scales, 12);
+            utmp[3] = ((utmp[2] >> 4) & kmask2) | (((utmp[1] >> 6) & kmask3) << 4);
+            const uint32_t uaux = utmp[1] & kmask1;
+            utmp[1] = (utmp[2] & kmask2) | (((utmp[0] >> 6) & kmask3) << 4);
+            utmp[2] = uaux;
+            utmp[0] &= kmask1;
+            const __m256i ms = _mm256_cvtepu8_epi16(_mm_set_epi32((int) utmp[3], (int) utmp[2], (int) utmp[1], (int) utmp[0]));
+            const __m128i prod = _mm_madd_epi16(_mm256_extracti128_si256(ms, 1), q8s);
+            const __m128i hsum = _mm_hadd_epi32(_mm_hadd_epi32(prod, mzero), mzero);
+            summs[k] += dmin * _mm_extract_epi32(hsum, 0);
+            const __m128i sc128 = _mm256_extracti128_si256(ms, 0);
+            scales[k] = _mm256_insertf128_si256(_mm256_castsi128_si256(sc128), sc128, 1);
+            hbits[k] = _mm256_loadu_si256((const __m256i*) b.qh);
+            hmask[k] = mone;
+            q5[k] = b.qs;
+            sumi[k] = _mm256_setzero_si256();
+        }
+        const int8_t* q8 = y[i].qs;
+        int bit = 0;
+        for (int j = 0; j < QK_K / 64; ++j) {
+            const __m256i shuf_0 = get_scale_shuffle_k4(2 * j + 0);
+            const __m256i shuf_1 = get_scale_shuffle_k4(2 * j + 1);
+            const __m256i q8_0 = _mm256_loadu_si256((const __m256i*) q8);
+            const __m256i q8_1 = _mm256_loadu_si256((const __m256i*) (q8 + 32));
+            q8 += 64;
+            const int b0 = bit++, b1 = bit++;
+            for (int k = 0; k < 4; ++k) {
+                const __m256i q5bits = _mm256_loadu_si256((const __m256i*) q5[k]);
+                q5[k] += 32;
+                const __m256i q5l_0 = _mm256_and_si256(q5bits, m4);
+                const __m256i q5h_0 = _mm256_slli_epi16(_mm256_srli_epi16(_mm256_and_si256(hbits[k], hmask[k]), b0), 4);
+                const __m256i q5_0 = _mm256_add_epi8(q5l_0, q5h_0);
+                hmask[k] = _mm256_slli_epi16(hmask[k], 1);
+
+                const __m256i q5l_1 = _mm256_and_si256(_mm256_srli_epi16(q5bits, 4), m4);
+                const __m256i q5h_1 = _mm256_slli_epi16(_mm256_srli_epi16(_mm256_and_si256(hbits[k], hmask[k]), b1), 4);
+                const __m256i q5_1 = _mm256_add_epi8(q5l_1, q5h_1);
+                hmask[k] = _mm256_slli_epi16(hmask[k], 1);
+
+                __m256i p16_0 = _mm256_maddubs_epi16(q5_0, q8_0);
+                __m256i p16_1 = _mm256_maddubs_epi16(q5_1, q8_1);
+                p16_0 = _mm256_madd_epi16(_mm256_shuffle_epi8(scales[k], shuf_0), p16_0);
+                p16_1 = _mm256_madd_epi16(_mm256_shuffle_epi8(scales[k], shuf_1), p16_1);
+                sumi[k] = _mm256_add_epi32(sumi[k], _mm256_add_epi32(p16_0, p16_1));
+            }
+        }
+        for (int k = 0; k < 4; ++k) {
+            acc[k] = _mm256_fmadd_ps(_mm256_set1_ps(yd * half_at(&xs[k][i], 0)), _mm256_cvtepi32_ps(sumi[k]), acc[k]);
+        }
+    }
+    for (int k = 0; k < 4; ++k) res[k] = hsum_float_8(acc[k]) + summs[k];
+}
+
+// Multi-token Q5_K x Q8_K dot product: unpacks each Q5_K block once across `nt` (<= kMaxMultiTok) tokens,
+// bit-exact with ggml_vec_dot_q5_K_q8_K.
+void q5k_dot_multi(const block_q5_K* x, int nb, const uint8_t* const* act, int nt, float* res) {
+    static const uint32_t kmask1 = 0x3f3f3f3f, kmask2 = 0x0f0f0f0f, kmask3 = 0x03030303;
+    const __m256i m4 = _mm256_set1_epi8(0xF);
+    const __m128i mzero = _mm_setzero_si128();
+    const __m256i mone = _mm256_set1_epi8(1);
+    __m256 acc[kMaxMultiTok];
+    float summs[kMaxMultiTok];
+    for (int t = 0; t < nt; ++t) {
+        acc[t] = _mm256_setzero_ps();
+        summs[t] = 0.f;
+    }
+    for (int i = 0; i < nb; ++i) {
+        const float xd = half_at(&x[i], 0), xdmin = half_at(&x[i], 1);
+        uint32_t utmp[4];
+        std::memcpy(utmp, x[i].scales, 12);
+        utmp[3] = ((utmp[2] >> 4) & kmask2) | (((utmp[1] >> 6) & kmask3) << 4);
+        const uint32_t uaux = utmp[1] & kmask1;
+        utmp[1] = (utmp[2] & kmask2) | (((utmp[0] >> 6) & kmask3) << 4);
+        utmp[2] = uaux;
+        utmp[0] &= kmask1;
+        const __m256i mins_and_scales =
+            _mm256_cvtepu8_epi16(_mm_set_epi32((int) utmp[3], (int) utmp[2], (int) utmp[1], (int) utmp[0]));
+        const __m128i mins = _mm256_extracti128_si256(mins_and_scales, 1);
+        const __m128i sc128 = _mm256_extracti128_si256(mins_and_scales, 0);
+        const __m256i scales = _mm256_insertf128_si256(_mm256_castsi128_si256(sc128), sc128, 1);
+        const __m256i hbits = _mm256_loadu_si256((const __m256i*) x[i].qh);
+        __m256i hmask = mone;
+        __m256i scale_0[4], scale_1[4], q5_0[4], q5_1[4];
+        const uint8_t* q5 = x[i].qs;
+        int bit = 0;
+        for (int j = 0; j < QK_K / 64; ++j) {
+            scale_0[j] = _mm256_shuffle_epi8(scales, get_scale_shuffle_k4(2 * j + 0));
+            scale_1[j] = _mm256_shuffle_epi8(scales, get_scale_shuffle_k4(2 * j + 1));
+            const __m256i q5bits = _mm256_loadu_si256((const __m256i*) q5);
+            q5 += 32;
+            const __m256i q5l_0 = _mm256_and_si256(q5bits, m4);
+            const __m256i q5h_0 = _mm256_slli_epi16(_mm256_srli_epi16(_mm256_and_si256(hbits, hmask), bit++), 4);
+            q5_0[j] = _mm256_add_epi8(q5l_0, q5h_0);
+            hmask = _mm256_slli_epi16(hmask, 1);
+            const __m256i q5l_1 = _mm256_and_si256(_mm256_srli_epi16(q5bits, 4), m4);
+            const __m256i q5h_1 = _mm256_slli_epi16(_mm256_srli_epi16(_mm256_and_si256(hbits, hmask), bit++), 4);
+            q5_1[j] = _mm256_add_epi8(q5l_1, q5h_1);
+            hmask = _mm256_slli_epi16(hmask, 1);
+        }
+        for (int t = 0; t < nt; ++t) {
+            const block_q8_K* y = (const block_q8_K*) act[t] + i;
+            const float d = y->d * xd;
+            const float dmin = -y->d * xdmin;
+            const int8_t* q8 = y->qs;
+            const __m256i q8sums = _mm256_loadu_si256((const __m256i*) y->bsums);
+            const __m128i q8s = _mm_hadd_epi16(_mm256_extracti128_si256(q8sums, 0), _mm256_extracti128_si256(q8sums, 1));
+            const __m128i prod = _mm_madd_epi16(mins, q8s);
+            const __m128i hsum = _mm_hadd_epi32(_mm_hadd_epi32(prod, mzero), mzero);
+            summs[t] += dmin * _mm_extract_epi32(hsum, 0);
+            __m256i sumi = _mm256_setzero_si256();
+            for (int j = 0; j < QK_K / 64; ++j) {
+                const __m256i q8_0 = _mm256_loadu_si256((const __m256i*) q8);
+                q8 += 32;
+                const __m256i q8_1 = _mm256_loadu_si256((const __m256i*) q8);
+                q8 += 32;
+                __m256i p16_0 = _mm256_madd_epi16(scale_0[j], _mm256_maddubs_epi16(q5_0[j], q8_0));
+                __m256i p16_1 = _mm256_madd_epi16(scale_1[j], _mm256_maddubs_epi16(q5_1[j], q8_1));
+                sumi = _mm256_add_epi32(sumi, _mm256_add_epi32(p16_0, p16_1));
+            }
+            acc[t] = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(sumi), acc[t]);
+        }
+    }
+    for (int t = 0; t < nt; ++t) res[t] = hsum_float_8(acc[t]) + summs[t];
+}
+
 }  // namespace
 
 Workers::Workers(int threads) {
@@ -694,7 +839,7 @@ void cpu_experts(Workers& workers, const CpuExpert* experts, int n, int rows, in
         const int i0 = runp[t / gu_tasks], i1 = runp[t / gu_tasks + 1];
         const CpuExpert& e = experts[byp[i0]];
         const int r0 = (t % gu_tasks) * kRowsPerTask, r1 = std::min(n_ff, r0 + kRowsPerTask);
-        if (gu_type == GGML_TYPE_Q4_K) {
+        if (gu_type == GGML_TYPE_Q4_K || gu_type == GGML_TYPE_Q5_K || gu_type == GGML_TYPE_Q6_K) {
             if (i1 - i0 == 1) {
                 const int j = byp[i0];
                 const block_q8_K* a = (const block_q8_K*) (actp + (size_t) experts[j].row * a_bytes);
@@ -707,20 +852,35 @@ void cpu_experts(Workers& workers, const CpuExpert* experts, int n, int rows, in
                 };
                 int r = r0;
                 for (; r + 1 < r1; r += 2) {
-                    const block_q4_K* gate0 = (const block_q4_K*) (e.gate + (size_t) r * gu_row);
-                    const block_q4_K* up0 = (const block_q4_K*) (e.up + (size_t) r * gu_row);
-                    const block_q4_K* gate1 = (const block_q4_K*) (e.gate + (size_t) (r + 1) * gu_row);
-                    const block_q4_K* up1 = (const block_q4_K*) (e.up + (size_t) (r + 1) * gu_row);
-                    float g0 = 0.f, u0 = 0.f, g1 = 0.f, u1 = 0.f;
-                    q4k_gate_up_2rows(gate0, up0, gate1, up1, nb_gu, a, g0, u0, g1, u1);
-                    hj[r] = act_fn(g0, u0);
-                    hj[r + 1] = act_fn(g1, u1);
+                    const uint8_t* gate0 = e.gate + (size_t) r * gu_row;
+                    const uint8_t* up0 = e.up + (size_t) r * gu_row;
+                    const uint8_t* gate1 = e.gate + (size_t) (r + 1) * gu_row;
+                    const uint8_t* up1 = e.up + (size_t) (r + 1) * gu_row;
+                    float gu4[4] = {0.f, 0.f, 0.f, 0.f};
+                    if (gu_type == GGML_TYPE_Q4_K) {
+                        q4k_gate_up_2rows((const block_q4_K*) gate0, (const block_q4_K*) up0,
+                                          (const block_q4_K*) gate1, (const block_q4_K*) up1, nb_gu, a,
+                                          gu4[0], gu4[1], gu4[2], gu4[3]);
+                    } else if (gu_type == GGML_TYPE_Q5_K) {
+                        q5k_down_4rows((const block_q5_K*) gate0, (const block_q5_K*) up0,
+                                       (const block_q5_K*) gate1, (const block_q5_K*) up1, nb_gu, a, gu4);
+                    } else {
+                        q6k_down_4rows((const block_q6_K*) gate0, (const block_q6_K*) up0,
+                                       (const block_q6_K*) gate1, (const block_q6_K*) up1, nb_gu, a, gu4);
+                    }
+                    hj[r] = act_fn(gu4[0], gu4[1]);
+                    hj[r + 1] = act_fn(gu4[2], gu4[3]);
                 }
                 for (; r < r1; ++r) {
-                    const block_q4_K* gate = (const block_q4_K*) (e.gate + (size_t) r * gu_row);
-                    const block_q4_K* up = (const block_q4_K*) (e.up + (size_t) r * gu_row);
+                    const uint8_t* gate = e.gate + (size_t) r * gu_row;
+                    const uint8_t* up = e.up + (size_t) r * gu_row;
                     float g = 0.f, u = 0.f;
-                    q4k_gate_up_1(gate, up, nb_gu, a, g, u);
+                    if (gu_type == GGML_TYPE_Q4_K) {
+                        q4k_gate_up_1((const block_q4_K*) gate, (const block_q4_K*) up, nb_gu, a, g, u);
+                    } else {
+                        tg->vec_dot(n_embd, &g, 0, gate, 0, a, 0, 1);
+                        tg->vec_dot(n_embd, &u, 0, up, 0, a, 0, 1);
+                    }
                     hj[r] = act_fn(g, u);
                 }
                 return;
@@ -731,10 +891,18 @@ void cpu_experts(Workers& workers, const CpuExpert* experts, int n, int rows, in
                 for (int k = 0; k < nt; ++k) a_ptrs[k] = actp + (size_t) experts[byp[base + k]].row * a_bytes;
                 float g_arr[kMaxMultiTok], u_arr[kMaxMultiTok];
                 for (int r = r0; r < r1; ++r) {
-                    const block_q4_K* gate = (const block_q4_K*) (e.gate + (size_t) r * gu_row);
-                    const block_q4_K* up = (const block_q4_K*) (e.up + (size_t) r * gu_row);
-                    q4k_dot_multi(gate, nb_gu, a_ptrs, nt, g_arr);
-                    q4k_dot_multi(up, nb_gu, a_ptrs, nt, u_arr);
+                    const uint8_t* gate = e.gate + (size_t) r * gu_row;
+                    const uint8_t* up = e.up + (size_t) r * gu_row;
+                    if (gu_type == GGML_TYPE_Q4_K) {
+                        q4k_dot_multi((const block_q4_K*) gate, nb_gu, a_ptrs, nt, g_arr);
+                        q4k_dot_multi((const block_q4_K*) up, nb_gu, a_ptrs, nt, u_arr);
+                    } else if (gu_type == GGML_TYPE_Q5_K) {
+                        q5k_dot_multi((const block_q5_K*) gate, nb_gu, a_ptrs, nt, g_arr);
+                        q5k_dot_multi((const block_q5_K*) up, nb_gu, a_ptrs, nt, u_arr);
+                    } else {
+                        q6k_dot_multi((const block_q6_K*) gate, nb_gu, a_ptrs, nt, g_arr);
+                        q6k_dot_multi((const block_q6_K*) up, nb_gu, a_ptrs, nt, u_arr);
+                    }
                     for (int k = 0; k < nt; ++k) {
                         const int j = byp[base + k];
                         float g = g_arr[k], u = u_arr[k];
@@ -787,7 +955,7 @@ void cpu_experts(Workers& workers, const CpuExpert* experts, int n, int rows, in
         for (int u = 0; u < n_run; ++u) {
             const uint8_t* down_base = experts[byp[runp[u]]].down;
             const int i0 = runp[u], i1 = runp[u + 1];
-            if (i1 - i0 == 1 && (d_type == GGML_TYPE_Q4_K || d_type == GGML_TYPE_Q6_K)) {
+            if (i1 - i0 == 1 && (d_type == GGML_TYPE_Q4_K || d_type == GGML_TYPE_Q5_K || d_type == GGML_TYPE_Q6_K)) {
                 const int j = byp[i0];
                 const block_q8_K* y = (const block_q8_K*) (hqp + (size_t) j * h_bytes);
                 int r = r0;
@@ -800,6 +968,9 @@ void cpu_experts(Workers& workers, const CpuExpert* experts, int n, int rows, in
                     if (d_type == GGML_TYPE_Q4_K) {
                         q4k_down_4rows((const block_q4_K*) d0, (const block_q4_K*) d1,
                                        (const block_q4_K*) d2, (const block_q4_K*) d3, nb_d, y, res4);
+                    } else if (d_type == GGML_TYPE_Q5_K) {
+                        q5k_down_4rows((const block_q5_K*) d0, (const block_q5_K*) d1,
+                                       (const block_q5_K*) d2, (const block_q5_K*) d3, nb_d, y, res4);
                     } else {
                         q6k_down_4rows((const block_q6_K*) d0, (const block_q6_K*) d1,
                                        (const block_q6_K*) d2, (const block_q6_K*) d3, nb_d, y, res4);
@@ -814,7 +985,7 @@ void cpu_experts(Workers& workers, const CpuExpert* experts, int n, int rows, in
                 }
                 continue;
             }
-            if (i1 - i0 > 1 && (d_type == GGML_TYPE_Q4_K || d_type == GGML_TYPE_Q6_K)) {
+            if (i1 - i0 > 1 && (d_type == GGML_TYPE_Q4_K || d_type == GGML_TYPE_Q5_K || d_type == GGML_TYPE_Q6_K)) {
                 for (int base = i0; base < i1; base += kMaxMultiTok) {
                     const int nt = std::min(kMaxMultiTok, i1 - base);
                     const uint8_t* h_ptrs[kMaxMultiTok];
@@ -824,6 +995,8 @@ void cpu_experts(Workers& workers, const CpuExpert* experts, int n, int rows, in
                         const uint8_t* down = down_base + (size_t) r * d_row;
                         if (d_type == GGML_TYPE_Q4_K)
                             q4k_dot_multi((const block_q4_K*) down, nb_d, h_ptrs, nt, d_arr);
+                        else if (d_type == GGML_TYPE_Q5_K)
+                            q5k_dot_multi((const block_q5_K*) down, nb_d, h_ptrs, nt, d_arr);
                         else
                             q6k_dot_multi((const block_q6_K*) down, nb_d, h_ptrs, nt, d_arr);
                         float* sr = s + (size_t) (r - r0) * n;
