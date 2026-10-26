@@ -939,15 +939,22 @@ void Gemma4::route(int il, const float* logits, int32_t, int* ids, float* w, flo
     double all = 0.0;
     for (int e = 0; e < n_expert_; ++e) all += probs[e] = std::exp(logits[e] * s - mx);
     const float inv = (float) (1.0 / all);
+    float* pick = probs;
+    if (opt_.cache_bias > 0.f && (size_t) il < layers_.size() && !layers_[(size_t) il].slot.empty()) {
+        const auto& slots = layers_[(size_t) il].slot;
+        const float b_mul = std::exp(opt_.cache_bias);
+        pick = probs + n_expert_;
+        for (int e = 0; e < n_expert_; ++e) pick[e] = slots[(size_t) e] ? probs[e] * b_mul : probs[e];
+    }
     float sum = 0.f;
     for (int k = 0; k < n_used_; ++k) {
         int best = 0;
         for (int e = 1; e < n_expert_; ++e)
-            if (probs[e] > probs[best]) best = e;
+            if (pick[e] > pick[best]) best = e;
         ids[k] = best;
         w[k] = probs[best] * inv;
         sum += w[k];
-        probs[best] = -1.f;
+        pick[best] = -1.f;
     }
     const float denom = std::max(sum, kMinWeightSum);
     for (int k = 0; k < n_used_; ++k) w[k] = w[k] / denom * escale[(size_t) ids[k]];

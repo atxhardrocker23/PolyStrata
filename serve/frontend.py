@@ -58,6 +58,10 @@ class ChatTemplate:
         source = re.sub(r"({%-?\s*)endgeneration(\s*-?%})", r"\1endif\2", self.source)
         self.template = env.from_string(re.sub(r"({%-?\s*)generation(\s*-?%})", r"\1if true\2", source))
         self.caps = self._detect_caps()
+        # What this template itself can do about the thinking level (see effort_levels / with_effort_instruction):
+        # it reads "reasoning_effort" (graded, its own instruction), and it reads "enable_thinking" (off possible).
+        self.supports_reasoning_effort = "reasoning_effort" in self.source
+        self.supports_enable_thinking = "enable_thinking" in self.source
 
     def render(self, messages: list[dict], tools: list[dict] | None = None, add_generation_prompt: bool = True,
                **kwargs) -> str:
@@ -160,6 +164,53 @@ def budget_effort(tokens) -> dict:
     except (TypeError, ValueError):
         return {}
     return {"reasoning_effort": "low" if n < 2048 else "medium" if n < 8192 else "xhigh"}
+
+
+# The effort instruction this server adds for a template that does not read "reasoning_effort" itself, so every model
+# can offer graded thinking instead of a bare on/off.  Same words the Qwen3.8 template uses for its xhigh and low.
+EFFORT_INSTRUCTION = {
+    "low": "Reasoning effort is set to low. Keep your thinking brief and focused, moving directly to the "
+           "conclusion without unnecessary elaboration.",
+    "medium": "Reasoning effort is set to medium. Think as much as the task needs, without unnecessary "
+              "elaboration.",
+    "xhigh": "Reasoning effort is set to xhigh. Please think carefully through the task, validate key "
+             "assumptions, consider plausible alternatives, and prioritize correctness, consistency, and "
+             "clarity in the final answer.",
+}
+
+
+def effort_levels(source: str, system_ok: bool = True) -> list[str]:
+    """The thinking levels a model can honestly offer, from its chat template.
+
+    Off needs a template that reads "enable_thinking" (a model that always thinks cannot turn it off).  The three
+    graded levels are always offered: a template that reads "reasoning_effort" carries the instruction itself, and
+    one that does not gets it from with_effort_instruction() - which needs a system turn it can render.
+    """
+    levels = ["low", "medium", "high"] if system_ok else []
+    return (["off"] + levels) if "enable_thinking" in source else levels
+
+
+def with_effort_instruction(messages: list[dict], level: str) -> list[dict]:
+    """The messages with the effort instruction in front of the first system turn (a new one when there is none).
+
+    For a template that does not read "reasoning_effort", this is what makes low and high different requests: the
+    model is told how much to think.  Off is not this path (enable_thinking closes the thinking block instead).
+    """
+    text = EFFORT_INSTRUCTION.get(level)
+    if not text:
+        return messages
+    out = list(messages)
+    for i, m in enumerate(out):
+        if m.get("role") in ("system", "developer"):
+            body = m.get("content")
+            if isinstance(body, str):
+                out[i] = {**m, "content": text + "\n\n" + body}
+            elif isinstance(body, list):
+                out[i] = {**m, "content": [{"type": "text", "text": text + "\n\n"}, *body]}
+            else:
+                out[i] = {**m, "content": text}
+            return out
+    return [{"role": "system", "content": text}, *out]
 
 
 def _has_image(content) -> bool:
@@ -585,6 +636,10 @@ def openai_to_messages(req: dict) -> tuple[list[dict], list[dict] | None, dict]:
             kwargs = {"enable_thinking": False}
         elif k == "reasoning_effort" and "enable_thinking" not in kwargs:
             kwargs.update(effort_kwargs(v))
+    # A client may also send enable_thinking at the top level (vLLM's chat completions do): false is off, and it wins
+    # over an effort, as the template kwargs form does.  true asks for thinking, which is the default anyway.
+    if req.get("enable_thinking") is False:
+        kwargs = {"enable_thinking": False}
     # #25: earlier turns keep their thinking (Qwen3.6's template), as llama.cpp's --chat-template-kwargs passes it
     if isinstance(ctk.get("preserve_thinking"), bool):
         kwargs["preserve_thinking"] = ctk["preserve_thinking"]

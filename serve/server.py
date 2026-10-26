@@ -59,8 +59,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT))   # run as a script (run-<model>.bat) as well as a module
 from serve.frontend import (THINK_END, ChatTemplate, Event, OutputParser, anthropic_to_messages,  # noqa: E402
-                            forced_call, gemma_model_turn, images_of, literal_tags, mark_think_literals,
-                            openai_to_messages, tool_choice_of, unmark_think_literals)
+                            effort_levels, forced_call, gemma_model_turn, images_of, literal_tags,
+                            mark_think_literals, openai_to_messages, tool_choice_of, unmark_think_literals,
+                            with_effort_instruction)
 from serve.mcp import McpCancelled, hub_from_config  # noqa: E402
 from serve import runconfig  # noqa: E402
 from serve import models as registry  # noqa: E402
@@ -3612,6 +3613,8 @@ class Service:
         loaded = self.loaded()
         model = {"id": self.model, "object": "model", "status": {"value": "loaded"},
                  "meta": {"n_ctx": self.reported_ctx()},
+                 "reasoning": {"efforts": effort_levels(self.template.source,
+                                                       bool(self.template.caps.get("supports_system_role", True)))},
                  "architecture": {"input_modalities": ["text", "image"] if self.vision is not None else ["text"],
                                   "output_modalities": ["text"]}}
         if not loaded and (self.switch_on_request or self.idle_unload_s or getattr(self.engine, "unloaded", False)):
@@ -3627,6 +3630,7 @@ class Service:
                 other = {"id": e["id"], "object": "model",
                          "status": {"value": "loading" if e["status"] == "loading" else "unloaded"},
                          **({"meta": {"n_ctx": e["context"]}} if e["context"] else {}),
+                         "reasoning": {"efforts": e.get("efforts") or ["off", "low", "medium", "high"]},
                          "architecture": {"input_modalities": ["text", "image"] if e["multimodal"] else ["text"],
                                           "output_modalities": ["text"]}}
                 names = [a for a in e["aliases"] if a != e["id"]]
@@ -4328,6 +4332,11 @@ class Service:
             raise ValueError("No messages provided.")
         effort = kwargs.get("reasoning_effort")
         off = kwargs.get("enable_thinking") is False
+        # A template that does not read reasoning_effort gets the effort as an instruction in front of its system turn,
+        # so low/medium/high are different requests on every model rather than only on the Qwen3.8 one.  The template
+        # that does read it (Qwen3.8's) carries its own wording and is left alone.
+        if effort and not off and not self.template.supports_reasoning_effort:
+            messages = with_effort_instruction(messages, effort)
         # said either way: Gemma's template thinks only when told to, the others unless told not to.  The config's
         # preserve_thinking is the default; a request's chat_template_kwargs can still turn it off.
         kwargs = {**self.template_tokens, **({"preserve_thinking": True} if self.preserve_thinking else {}), **kwargs,

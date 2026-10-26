@@ -25,13 +25,15 @@ class ModelGate:
     POLL_S = 0.25                                   # how often a waiting request looks at its cancel event
     ANY = object()                                  # a request's target when any loaded model will do: it never switches
 
-    def __init__(self, current):
+    def __init__(self, current, drain_limit: int | None = 20):
         """`current()` names the model that is loaded (any value that compares equal for the same model)."""
         self._current = current
         self.switching = None                       # the model a switch is loading, while it runs
         self.users = 0                              # the leases held
         self._queue: list[dict] = []                # the waiting requests, oldest first
         self._cond = threading.Condition()
+        self._drain_limit = drain_limit             # max requests for current model before yielding to waiting model
+        self._consecutive_drained = 0
 
     @property
     def current(self):
@@ -92,6 +94,7 @@ class ModelGate:
             self.switching = None
             self._queue.remove(ticket)
             self.users += 1
+            self._consecutive_drained = 0
             for t in self._queue:                    # every request waiting for the model now loaded goes with it
                 if t["target"] == target:
                     t["go"] = True
@@ -101,15 +104,26 @@ class ModelGate:
             self._cond.notify_all()
 
     def _schedule(self):
-        """Under the lock: let in the requests for the loaded model that are not behind one for another model; when
-        nothing runs, give the oldest waiting request for another model its switch."""
+        """Under the lock: drain requests for the loaded model before evicting for another model;
+        when nothing runs and current model's queue is clear (or quota reached), give the next waiting model its switch."""
         if self.switching is not None:
             return
         current = self.current
-        while self._queue and self._queue[0]["target"] in (current, self.ANY):
-            self._queue.pop(0)["go"] = True
-            self.users += 1
+
+        # Drain requests waiting for the currently loaded model first so it is not prematurely evicted
+        if current is not None:
+            for t in list(self._queue):
+                if t["target"] in (current, self.ANY):
+                    if self._drain_limit is not None and self._consecutive_drained >= self._drain_limit:
+                        break
+                    t["go"] = True
+                    self.users += 1
+                    self._consecutive_drained += 1
+                    self._queue.remove(t)
+
+        # Once all current model requests have drained (or no current model loaded), switch to the next model
         if self._queue and self.users == 0:
             head = self._queue[0]
             head["switch"] = True
             self.switching = head["target"]
+            self._consecutive_drained = 0

@@ -96,6 +96,24 @@ def _aliases(value) -> list[str]:
     return [x.strip() for x in value if isinstance(x, str) and x.strip()] if isinstance(value, list) else []
 
 
+def _effort_levels(tokenizer) -> list[str]:
+    """The thinking levels this model's own chat template can offer (serve/frontend.py's effort_levels).
+
+    Off needs the template to read "enable_thinking"; a model that always thinks (Flint's template has neither
+    switch) offers only the three graded levels.  Read from the tokenizer directory, with the server's template as
+    the fallback, so an installed model answers this before it is ever loaded.
+    """
+    path = Path(tokenizer) / "chat_template.jinja"
+    if not path.is_file():
+        path = ROOT / "serve" / "chat_template.jinja"
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError:
+        return ["off", "low", "medium", "high"]
+    levels = ["low", "medium", "high"]
+    return (["off"] + levels) if "enable_thinking" in source else levels
+
+
 def describe(config: Path) -> dict | None:
     """The registry's entry for a run config, or None when the file is not one."""
     try:
@@ -110,19 +128,20 @@ def describe(config: Path) -> dict | None:
     path = (cwd / model) if model and not Path(model).is_absolute() else Path(model) if model else None
     exe = Path(cfg["exe"]) if Path(cfg["exe"]).is_absolute() else cwd / cfg["exe"]
     ctx = _arg(args, "--max-context") or _arg(args, "--ctx")
+    tok = Path(cfg.get("tokenizer") or "")
     e = {
         "id": str(cfg.get("model_name") or Path(config).stem.replace("strata-", "", 1)),
         "config": str(config),
         "display_name": None, "backend": "qwen4exp", "path": str(path) if path else None,
         "quantization": None, "params_total": None, "params_active": None,
         "context": int(ctx) if ctx and str(ctx).isdigit() else None,
+        "efforts": _effort_levels(tok),
         "multimodal": bool(cfg.get("vision")),
         "aliases": _aliases(cfg.get("aliases")),
         "mtp": bool(_arg(args, "--draft-model")) and "--no-draft" not in args,
         "ram_gb": None, "vram_gb": None,
         "status": "available", "problem": None,
     }
-    tok = Path(cfg.get("tokenizer") or "")
     if not exe.exists():
         e["status"], e["problem"] = "unavailable", f"the engine is missing ({exe})"
     elif not (tok / "vocab.json").exists():

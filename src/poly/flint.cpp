@@ -348,10 +348,13 @@ void Flint::output_rows(int first, int rows, float* h) {
 // files so far), and weights from the bare gates, made to sum to one.
 void Flint::route(int il, const float* logits, int32_t, int* ids, float* w, float* probs) const {
     const std::vector<float>& bias = blocks_[(size_t) il].probs_b;
+    const bool use_cb = opt_.cache_bias > 0.f && (size_t) il < layers_.size() && !layers_[(size_t) il].slot.empty();
+    const auto* slots = use_cb ? layers_[(size_t) il].slot.data() : nullptr;
     float* pick = probs + n_expert_;
     for (int e = 0; e < n_expert_; ++e) {
         probs[e] = 1.f / (1.f + std::exp(-logits[e]));
-        pick[e] = probs[e] + bias[(size_t) e];
+        const float p_pick = (slots && slots[e]) ? (1.f / (1.f + std::exp(-(logits[e] + opt_.cache_bias)))) : probs[e];
+        pick[e] = p_pick + bias[(size_t) e];
     }
     float sum = 0.f;
     for (int k = 0; k < n_used_; ++k) {

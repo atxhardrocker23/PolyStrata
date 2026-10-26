@@ -527,21 +527,28 @@ void Qwen35::output_rows(int first, int rows, float* h) {
 
 // What ggml's MoE graph does for this model: a softmax over every expert's score, the n_used most likely, and
 // their weights made to sum to one.
-void Qwen35::route(int, const float* logits, int32_t, int* ids, float* w, float* probs) const {
+void Qwen35::route(int il, const float* logits, int32_t, int* ids, float* w, float* probs) const {
     float mx = logits[0];
     for (int e = 1; e < n_expert_; ++e) mx = std::max(mx, logits[e]);
     double all = 0.0;
     for (int e = 0; e < n_expert_; ++e) all += probs[e] = std::exp(logits[e] - mx);
     const float inv = (float) (1.0 / all);
+    float* pick = probs;
+    if (opt_.cache_bias > 0.f && (size_t) il < layers_.size() && !layers_[(size_t) il].slot.empty()) {
+        const auto& slots = layers_[(size_t) il].slot;
+        const float b_mul = std::exp(opt_.cache_bias);
+        pick = probs + n_expert_;
+        for (int e = 0; e < n_expert_; ++e) pick[e] = slots[(size_t) e] ? probs[e] * b_mul : probs[e];
+    }
     float sum = 0.f;
     for (int k = 0; k < n_used_; ++k) {
         int best = 0;
         for (int e = 1; e < n_expert_; ++e)
-            if (probs[e] > probs[best]) best = e;
+            if (pick[e] > pick[best]) best = e;
         ids[k] = best;
         w[k] = probs[best] * inv;
         sum += w[k];
-        probs[best] = -1.f;
+        pick[best] = -1.f;
     }
     const float denom = std::max(sum, kMinWeightSum);
     for (int k = 0; k < n_used_; ++k) w[k] /= denom;

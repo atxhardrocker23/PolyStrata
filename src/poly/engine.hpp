@@ -89,6 +89,8 @@ struct Options {
     float skip_weight = 0;        ///< in place of tail_skip: a routed expert outside VRAM whose router weight is under
                                   ///< this share of its token's experts' weight, for every token of the call, is left
                                   ///< out (--skip-weight); 0: tail_skip decides
+    float cache_bias = 0;         ///< router logit bonus added to VRAM-resident experts before top-k selection, while
+                                  ///< keeping unbiased logits for combine weights (--cache-bias, STRATA_CACHE_BIAS)
     std::string layer_split;      ///< the layers across the CUDA devices this process sees, in their order: "auto"
                                   ///< (by each card's free VRAM) or the first layer of each later card ("20,30");
                                   ///< empty, or one device: the current card alone
@@ -461,6 +463,7 @@ protected:
     void lin2(const Dev& a, float* ya, const Dev& b, float* yb, const float* x, int n, const void* xq = nullptr);
     void fill_expert_cache();
     void start_swaps();
+    void pin_experts();
     void plan_ahead(Layer& L, int il);
     void run(const int32_t* tokens, int n);
     bool pick_way(int t);
@@ -548,6 +551,9 @@ protected:
     mutable Stats all_stats_;             ///< stats() of every card's engine together
     double node_share_ = 0;
     std::thread mapper_;                  ///< reads the experts' pages once after load, so they are mapped
+    std::vector<char> pinned_layer_;      ///< STRATA_POLY_PIN_EXPERTS: a layer's mapped experts are registered with
+                                          ///< the driver, so stage() and the swaps upload straight from them
+    std::vector<void*> host_registered_;  ///< what cudaHostRegister took, given back by ~Engine
     std::atomic<bool> map_quit_{false};
     void* st_ = nullptr;   ///< the stream everything but the staging ahead runs on
     bool freeze_experts_ = false;            ///< STRATA_FREEZE_EXPERTS: the experts' split is frozen
@@ -772,6 +778,7 @@ protected:
     uint64_t images_set_ = 0;            ///< counts images(): what was derived from an earlier list is stale
     std::vector<int64_t> use_, prior_;   ///< routed count per (layer, expert): this run, and the profile's
     Stats stats_;
+    bool stream_stage_ = false;          ///< opt-in streaming CPU stores into the existing expert upload buffers
 };
 
 }  // namespace strata::poly

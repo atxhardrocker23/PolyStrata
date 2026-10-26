@@ -31,7 +31,13 @@ namespace {
 // Rows of gate and up, and of down, a task.  With fewer tasks than several a thread, the last round left threads
 // idle at the end of every layer: 64 rows gave Tiel's 512-row experts 8 tasks each, and its down products 32 tasks.
 constexpr int kRowsPerTask = 32;
-constexpr int kRowsPerDownTask = 16;
+// 32 and not 16: with 16 a task read 10 KB of each expert's down, too little for the hardware prefetcher to get
+// going (GLM 5.3 Flash Q2_K, 4 experts a call, i7-13700K, DDR5-4000: down 31.6 GB/s; with 32 and kPrefetchRows 2,
+// 45 GB/s)
+constexpr int kRowsPerDownTask = 32;
+// Each row's dot products first ask for the row this many rows on in the same task, which the hardware prefetcher
+// does not see coming across the rows of several experts
+constexpr int kPrefetchRows = 2;
 constexpr int kSpinsBeforeSleep = 20000;   // about a millisecond of pause instructions
 constexpr int kMaxMultiTok = 8;
 
@@ -43,6 +49,10 @@ void init_once() {
 }
 
 thread_local bool in_task = false;   // this thread is running a task of a batch
+
+inline void prefetch_row(const uint8_t* p, size_t n) {
+    for (size_t i = 0; i < n; i += 64) _mm_prefetch((const char*) p + i, _MM_HINT_T0);
+}
 
 // Bit-exact AVX2 implementation of ggml's quantize_row_q8_K_ref (which is scalar in ggml-cpu on x86).
 void q8k_quant_avx2(const float* x, void* vy, int64_t k) {
@@ -856,6 +866,10 @@ void cpu_experts(Workers& workers, const CpuExpert* experts, int n, int rows, in
                     const uint8_t* up0 = e.up + (size_t) r * gu_row;
                     const uint8_t* gate1 = e.gate + (size_t) (r + 1) * gu_row;
                     const uint8_t* up1 = e.up + (size_t) (r + 1) * gu_row;
+                    if (r + 2 < r1) {
+                        prefetch_row(gate0 + 2 * gu_row, 2 * gu_row);
+                        prefetch_row(up0 + 2 * gu_row, 2 * gu_row);
+                    }
                     float gu4[4] = {0.f, 0.f, 0.f, 0.f};
                     if (gu_type == GGML_TYPE_Q4_K) {
                         q4k_gate_up_2rows((const block_q4_K*) gate0, (const block_q4_K*) up0,
@@ -893,6 +907,10 @@ void cpu_experts(Workers& workers, const CpuExpert* experts, int n, int rows, in
                 for (int r = r0; r < r1; ++r) {
                     const uint8_t* gate = e.gate + (size_t) r * gu_row;
                     const uint8_t* up = e.up + (size_t) r * gu_row;
+                    if (r + kPrefetchRows < r1) {
+                        prefetch_row(gate + (size_t) kPrefetchRows * gu_row, gu_row);
+                        prefetch_row(up + (size_t) kPrefetchRows * gu_row, gu_row);
+                    }
                     if (gu_type == GGML_TYPE_Q4_K) {
                         q4k_dot_multi((const block_q4_K*) gate, nb_gu, a_ptrs, nt, g_arr);
                         q4k_dot_multi((const block_q4_K*) up, nb_gu, a_ptrs, nt, u_arr);
@@ -922,6 +940,10 @@ void cpu_experts(Workers& workers, const CpuExpert* experts, int n, int rows, in
         for (int r = r0; r < r1; ++r) {
             const uint8_t* gate = e.gate + (size_t) r * gu_row;
             const uint8_t* up = e.up + (size_t) r * gu_row;
+            if (r + kPrefetchRows < r1) {
+                prefetch_row(gate + (size_t) kPrefetchRows * gu_row, gu_row);
+                prefetch_row(up + (size_t) kPrefetchRows * gu_row, gu_row);
+            }
             for (int i = i0; i < i1; ++i) {
                 const int j = byp[i];
                 const uint8_t* a = actp + (size_t) experts[j].row * a_bytes;
@@ -964,6 +986,7 @@ void cpu_experts(Workers& workers, const CpuExpert* experts, int n, int rows, in
                     const uint8_t* d1 = down_base + (size_t) (r + 1) * d_row;
                     const uint8_t* d2 = down_base + (size_t) (r + 2) * d_row;
                     const uint8_t* d3 = down_base + (size_t) (r + 3) * d_row;
+                    if (r + 4 < r1) prefetch_row(d0 + 4 * d_row, 4 * d_row);
                     float res4[4];
                     if (d_type == GGML_TYPE_Q4_K) {
                         q4k_down_4rows((const block_q4_K*) d0, (const block_q4_K*) d1,
@@ -993,6 +1016,7 @@ void cpu_experts(Workers& workers, const CpuExpert* experts, int n, int rows, in
                     float d_arr[kMaxMultiTok];
                     for (int r = r0; r < r1; ++r) {
                         const uint8_t* down = down_base + (size_t) r * d_row;
+                        if (r + kPrefetchRows < r1) prefetch_row(down + (size_t) kPrefetchRows * d_row, d_row);
                         if (d_type == GGML_TYPE_Q4_K)
                             q4k_dot_multi((const block_q4_K*) down, nb_d, h_ptrs, nt, d_arr);
                         else if (d_type == GGML_TYPE_Q5_K)
@@ -1007,6 +1031,7 @@ void cpu_experts(Workers& workers, const CpuExpert* experts, int n, int rows, in
             }
             for (int r = r0; r < r1; ++r) {
                 const uint8_t* down = down_base + (size_t) r * d_row;
+                if (r + kPrefetchRows < r1) prefetch_row(down + (size_t) kPrefetchRows * d_row, d_row);
                 float* sr = s + (size_t) (r - r0) * n;
                 for (int i = i0; i < i1; ++i)
                     td->vec_dot(n_ff, sr + byp[i], 0, down, 0, hqp + (size_t) byp[i] * h_bytes, 0, 1);

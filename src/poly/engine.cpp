@@ -9,6 +9,7 @@
 #endif
 
 #include "engine.hpp"
+#include "stage_copy.hpp"
 
 #include "deepseek4.hpp"
 #include "gemma4.hpp"
@@ -433,6 +434,7 @@ Engine::~Engine() {
     if (up_) cudaStreamSynchronize(cs(up_));
     if (rs_) cudaStreamSynchronize(cs(rs_));
     if (st_) cudaStreamSynchronize(cs(st_));
+    for (void* p : host_registered_) cudaHostUnregister(p);
     workers_.reset();
     mmq_.reset();
     for (void* p : dev_allocs_) cudaFree(p);
@@ -1317,6 +1319,86 @@ void Engine::fill_expert_cache() {
     }
 }
 
+// STRATA_POLY_PIN_EXPERTS=<MiB> (opt-in): the mapped experts of the MoE layers registered with the driver, layer by
+// layer in order, up to that many MiB (0: as many as it takes) and as long as the system lets it lock them.  A
+// registered layer's experts go from the file cache to the card in one copy: a prompt's staging (stage()) skips the
+// workers' copy into the pinned buffers, and a swap (follow_loop()) skips its copy into a slot's pinned buffer.  The
+// pages stay locked in RAM, so the budget is RAM the system cannot page out.
+void Engine::pin_experts() {
+    pinned_layer_.assign(layers_.size(), 0);
+    const char* env = std::getenv("STRATA_POLY_PIN_EXPERTS");
+    if (!env || !*env || all_cached()) return;
+    const long long asked_mib = std::atoll(env);
+    if (asked_mib <= 0) return;
+    const Clock::time_point t0 = Clock::now();
+#ifdef _WIN32
+    // On Windows WDDM, cudaHostRegister shares WDDM non-local video memory aperture with cudaHostAlloc buffers;
+    // capping at 2048 MiB prevents WDDM aperture exhaustion on 32 GB RAM hosts.
+    const size_t budget = (size_t) std::min<long long>(asked_mib, 2048LL) << 20;
+#else
+    const size_t budget = (size_t) asked_mib << 20;
+#endif
+    size_t done = 0;
+    int n_pinned = 0;
+    cudaError_t first_err = cudaSuccess;
+    struct Span { uintptr_t lo, hi; };
+    for (size_t il = 0; il < layers_.size(); ++il) {
+        const Layer& L = layers_[il];
+        if (!L.moe) continue;
+        const bool fused = L.gu_stride != L.gu_bytes;   // gate and up of an expert side by side, as one array
+        std::vector<Span> sp;
+        auto add_span = [&](const uint8_t* p, size_t n) {
+            const uintptr_t lo = (uintptr_t) p & ~uintptr_t(4095);
+            const uintptr_t hi = ((uintptr_t) p + n + 4095) & ~uintptr_t(4095);
+            sp.push_back({lo, hi});
+        };
+        add_span(L.exp_gate, (size_t) n_expert_ * L.gu_stride);
+        if (!fused) add_span(L.exp_up, (size_t) n_expert_ * L.gu_bytes);
+        add_span(L.exp_down, (size_t) n_expert_ * L.d_bytes);
+        std::sort(sp.begin(), sp.end(), [](const Span& a, const Span& b) { return a.lo < b.lo; });
+        std::vector<Span> merged;
+        for (const Span& s : sp) {
+            if (!merged.empty() && s.lo <= merged.back().hi)
+                merged.back().hi = std::max(merged.back().hi, s.hi);
+            else
+                merged.push_back(s);
+        }
+        size_t need = 0;
+        for (const Span& m : merged) need += m.hi - m.lo;
+        if (budget && done + need > budget) break;
+        std::vector<void*> layer_reg;
+        bool ok = true;
+        for (const Span& m : merged) {
+            cudaError_t err = cudaHostRegister((void*) m.lo, m.hi - m.lo, cudaHostRegisterReadOnly);
+            if (err != cudaSuccess) {
+                cudaGetLastError();
+                err = cudaHostRegister((void*) m.lo, m.hi - m.lo, cudaHostRegisterDefault);
+            }
+            if (err != cudaSuccess) {
+                cudaGetLastError();
+                if (first_err == cudaSuccess) first_err = err;
+                ok = false;
+                break;
+            }
+            layer_reg.push_back((void*) m.lo);
+        }
+        if (!ok) {
+            for (void* p : layer_reg) cudaHostUnregister(p);
+            break;
+        }
+        for (void* p : layer_reg) host_registered_.push_back(p);
+        done += need;
+        pinned_layer_[il] = 1;
+        ++n_pinned;
+    }
+    if (first_err != cudaSuccess && n_pinned == 0)
+        std::fprintf(stderr, "strata-poly: STRATA_POLY_PIN_EXPERTS: cudaHostRegister refused (%s); 0 layers pinned\n",
+                     cudaGetErrorString(first_err));
+    else
+        std::fprintf(stderr, "strata-poly: the experts of %d layers pinned (%zu MiB) in %.1f s (STRATA_POLY_PIN_EXPERTS)\n",
+                     n_pinned, done >> 20, ms_since(t0) / 1000.0);
+}
+
 // The thread and the stream that bring experts into the cache while an answer is written (follow()).
 void Engine::start_swaps() {
     if (swap_ || cached_ == 0 || opt_.expert_swaps == 0) return;
@@ -1578,11 +1660,27 @@ void Engine::follow_loop() {
         lk.unlock();
         const Layer& L = layers_[(size_t) s->il];
         const size_t e = (size_t) s->e, gu = L.gu_bytes;
-        std::memcpy(s->pinned, L.exp_gate + e * L.gu_stride, gu);
-        std::memcpy(s->pinned + gu, L.exp_up + e * L.gu_stride, gu);
-        std::memcpy(s->pinned + 2 * gu, L.exp_down + e * L.d_bytes, L.d_bytes);
-        cudaError_t err = cudaMemcpyAsync(s->slot, s->pinned, 2 * gu + L.d_bytes, cudaMemcpyHostToDevice, cs(swap_st_));
-        if (err == cudaSuccess) err = cudaEventRecord(s->done, cs(swap_st_));
+        const cudaStream_t ss = cs(swap_st_);
+        cudaError_t err = cudaSuccess;
+        if ((size_t) s->il < pinned_layer_.size() && pinned_layer_[(size_t) s->il]) {
+            // straight from the registered file view: the expert crosses RAM once, not three times (read, written to
+            // the pinned buffer, read again), which the CPU's experts beside it feel (GLM 5.3 Flash: ~4 swaps a token)
+            if (L.exp_up == L.exp_gate + gu && L.gu_stride == 2 * gu) {
+                err = cudaMemcpyAsync(s->slot, L.exp_gate + e * L.gu_stride, 2 * gu, cudaMemcpyHostToDevice, ss);
+            } else {
+                err = cudaMemcpyAsync(s->slot, L.exp_gate + e * L.gu_stride, gu, cudaMemcpyHostToDevice, ss);
+                if (err == cudaSuccess)
+                    err = cudaMemcpyAsync(s->slot + gu, L.exp_up + e * L.gu_stride, gu, cudaMemcpyHostToDevice, ss);
+            }
+            if (err == cudaSuccess)
+                err = cudaMemcpyAsync(s->slot + 2 * gu, L.exp_down + e * L.d_bytes, L.d_bytes, cudaMemcpyHostToDevice, ss);
+        } else {
+            std::memcpy(s->pinned, L.exp_gate + e * L.gu_stride, gu);
+            std::memcpy(s->pinned + gu, L.exp_up + e * L.gu_stride, gu);
+            std::memcpy(s->pinned + 2 * gu, L.exp_down + e * L.d_bytes, L.d_bytes);
+            err = cudaMemcpyAsync(s->slot, s->pinned, 2 * gu + L.d_bytes, cudaMemcpyHostToDevice, ss);
+        }
+        if (err == cudaSuccess) err = cudaEventRecord(s->done, ss);
         lk.lock();
         if (err != cudaSuccess) {
             swap_error_ = cudaGetErrorString(err);
@@ -1719,7 +1817,15 @@ void Engine::load(const Options& o) {
     if (opt_.tail_skip < 0) throw std::runtime_error("--tail-skip (STRATA_ROUTE_TAIL_SKIP) cannot be negative");
     if (!(opt_.skip_weight >= 0.f && opt_.skip_weight < 1.f))
         throw std::runtime_error("--skip-weight is a share of a token's experts' weight: 0 (off) up to below 1");
+    if (opt_.cache_bias < 0.f)
+        throw std::runtime_error("--cache-bias (STRATA_CACHE_BIAS) cannot be negative");
     if (opt_.dump || std::min(opt_.prompt_batch, opt_.max_context) == 1) opt_.window = 1;
+    const char* stream_stage = std::getenv("STRATA_POLY_STREAM_STAGE");
+    const bool requested_stream_stage = stream_stage && std::atoi(stream_stage) == 1;
+    stream_stage_ = requested_stream_stage && stage_copy_streaming_available();
+    if (requested_stream_stage)
+        std::fprintf(stderr, "strata-poly: STRATA_POLY_STREAM_STAGE: %s\n",
+                     stream_stage_ ? "streaming CPU stores for expert staging" : "unsupported CPU build; stock copies");
     gg_ = std::make_unique<Shards>(opt_.model);
     if (!opt_.draft_model.empty() && opt_.draft && opt_.window != 1) dg_ = std::make_unique<Shards>(opt_.draft_model);
     load_geometry();
@@ -1880,6 +1986,7 @@ void Engine::load(const Options& o) {
     route_tmp_.assign((size_t) workers_->threads() * 2 * n_expert_, 0.f);
     start_swaps();
     reset();
+    pin_experts();
     // nothing is read from the files when every expert is in VRAM
     if (!all_cached())
         mapper_ = std::thread([this, spans = std::move(spans)] { map_pages(spans, *gg_, map_quit_); });
@@ -2370,7 +2477,9 @@ bool Engine::moe(Layer& L, int il, int n, const std::function<void()>* first) {
             if (split_) cudaSetDevice(device_);   // one of the experts' threads, which every card's engine shares
             if (first && at == 0) (*first)();
             const size_t ff = (size_t) n_ff_exp_, q8_row = kernels::native_q8_1_bytes(n_ff_exp_);
-            const int per = rows_ >= kSlots ? kSlots : 1;   // the scratch holds rows_ experts' values
+            // the scratch holds rows_ experts' values, and a launch's down rows stay inside one add_scaled's kSumRows
+            const int most = kernels::native_mmvq_slots_wide() ? kSlots : 8;
+            const int per = rows_ >= most ? most : rows_ >= 8 ? 8 : 1;
             ScaledRows sum{};
             for (int i0 = 0; i0 < n_cached; i0 += per) {
                 const int m = std::min(per, n_cached - i0);
@@ -2481,8 +2590,42 @@ bool Engine::moe_card(Layer& L, int il, int n) {
 void Engine::stage(const Layer& L, const int32_t* experts, int m, void* stream, bool alone) {
     staged_il_ = -1;   // whatever the buffer held
     const size_t gu2 = 2 * L.gu_bytes, down_at = pad((size_t) m * gu2);
+    // a layer of layers_ (not a draft block's) whose experts are registered: straight from the file view, a run of
+    // experts in a row as one copy, and no pinned buffer between
+    const bool own = !layers_.empty() && std::less_equal<const Layer*>()(layers_.data(), &L) &&
+                     std::less<const Layer*>()(&L, layers_.data() + layers_.size());
+    if (own && pinned_layer_.size() == layers_.size() && pinned_layer_[(size_t) (&L - layers_.data())]) {
+        const cudaStream_t s = cs(stream);
+        const bool fused = L.exp_up == L.exp_gate + L.gu_bytes && L.gu_stride == gu2;
+        for (int j = 0; j < m;) {
+            int k = j + 1;
+            while (k < m && experts[k] == experts[k - 1] + 1) ++k;
+            const size_t e = (size_t) experts[j], n = (size_t) (k - j);
+            if (fused) {
+                ck(cudaMemcpyAsync(stage_ + (size_t) j * gu2, L.exp_gate + e * L.gu_stride, n * gu2,
+                                   cudaMemcpyHostToDevice, s), "expert staging");
+            } else {
+                for (size_t q = 0; q < n; ++q) {
+                    ck(cudaMemcpyAsync(stage_ + (size_t) (j + q) * gu2, L.exp_gate + (e + q) * L.gu_stride,
+                                       L.gu_bytes, cudaMemcpyHostToDevice, s), "expert staging");
+                    ck(cudaMemcpyAsync(stage_ + (size_t) (j + q) * gu2 + L.gu_bytes, L.exp_up + (e + q) * L.gu_stride,
+                                       L.gu_bytes, cudaMemcpyHostToDevice, s), "expert staging");
+                }
+            }
+            ck(cudaMemcpyAsync(stage_ + down_at + (size_t) j * L.d_bytes, L.exp_down + e * L.d_bytes, n * L.d_bytes,
+                               cudaMemcpyHostToDevice, s), "expert staging");
+            j = k;
+        }
+        ck(cudaMemsetAsync(stage_ + down_at + (size_t) m * L.d_bytes, 0, kTail, s), "expert staging");
+        (void) alone;
+        return;
+    }
     const int per = (int) (chunk_bytes_ / (gu2 + L.d_bytes));
     const bool gu_contig = L.exp_up == L.exp_gate + L.gu_bytes;
+    const auto put = [&](void* dst, const void* src, size_t bytes) {
+        if (stream_stage_) stage_copy_streaming(dst, src, bytes);
+        else std::memcpy(dst, src, bytes);
+    };
     for (int j0 = 0; j0 < m; j0 += per) {
         const size_t c = (size_t) std::min(per, m - j0);
         stage_turn_ ^= 1;
@@ -2492,16 +2635,16 @@ void Engine::stage(const Layer& L, const int32_t* experts, int m, void* stream, 
         if (gu_contig) {
             const auto copy2_gu = [&](int i) {
                 const size_t j = (size_t) i / 2, e = (size_t) experts[(size_t) j0 + j];
-                if (i % 2 == 0) std::memcpy(h + j * gu2, L.exp_gate + e * L.gu_stride, gu2);
-                else std::memcpy(h + c * gu2 + j * L.d_bytes, L.exp_down + e * L.d_bytes, L.d_bytes);
+                if (i % 2 == 0) put(h + j * gu2, L.exp_gate + e * L.gu_stride, gu2);
+                else put(h + c * gu2 + j * L.d_bytes, L.exp_down + e * L.d_bytes, L.d_bytes);
             };
             (alone ? *stagers_ : *workers_).run((int) (2 * c), copy2_gu);
         } else {
             const auto copy = [&](int i) {
                 const size_t j = (size_t) i / 3, e = (size_t) experts[(size_t) j0 + j];
-                if (i % 3 == 0) std::memcpy(h + j * gu2, L.exp_gate + e * L.gu_stride, L.gu_bytes);
-                else if (i % 3 == 1) std::memcpy(h + j * gu2 + L.gu_bytes, L.exp_up + e * L.gu_stride, L.gu_bytes);
-                else std::memcpy(h + c * gu2 + j * L.d_bytes, L.exp_down + e * L.d_bytes, L.d_bytes);
+                if (i % 3 == 0) put(h + j * gu2, L.exp_gate + e * L.gu_stride, L.gu_bytes);
+                else if (i % 3 == 1) put(h + j * gu2 + L.gu_bytes, L.exp_up + e * L.gu_stride, L.gu_bytes);
+                else put(h + c * gu2 + j * L.d_bytes, L.exp_down + e * L.d_bytes, L.d_bytes);
             };
             (alone ? *stagers_ : *workers_).run((int) (3 * c), copy);
         }
