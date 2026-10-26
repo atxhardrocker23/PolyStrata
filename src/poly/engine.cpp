@@ -14,6 +14,7 @@
 #include "gemma4.hpp"
 #include "glm5next.hpp"
 #include "lfm2moe.hpp"
+#include "flint.hpp"
 #include "mmq.hpp"
 #include "qwen35.hpp"
 #include "runtime.hpp"
@@ -45,6 +46,9 @@
 #ifdef __linux__
 #include <sched.h>
 #include <unistd.h>
+#endif
+#ifdef _WIN32
+#include <windows.h>
 #endif
 
 namespace strata::poly {
@@ -162,17 +166,59 @@ int stay_near(const std::vector<std::pair<const uint8_t*, size_t>>& spans, const
 #endif
 }
 
+#ifdef _WIN32
+// The spans' bytes read through the file cache, 16 MiB a request, into a buffer that is thrown away.  A span that
+// is not in the model's files (a draft's own file) or a read that fails is left to map_pages()'s faults.
+void read_cached(const std::vector<std::pair<const uint8_t*, size_t>>& spans, const Shards& model,
+                 const std::atomic<bool>& quit) {
+    constexpr size_t kPiece = size_t(1) << 24;
+    std::vector<HANDLE> files(model.paths().size(), INVALID_HANDLE_VALUE);
+    std::vector<uint8_t> buf(kPiece);
+    for (const auto& s : spans) {
+        const auto [file, off] = model.place(s.first);
+        if (file < 0) continue;
+        HANDLE& h = files[(size_t) file];
+        if (h == INVALID_HANDLE_VALUE)
+            h = CreateFileA(model.paths()[(size_t) file].c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                            OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+        if (h == INVALID_HANDLE_VALUE) continue;
+        for (size_t at = 0; at < s.second && !quit.load(std::memory_order_relaxed); at += kPiece) {
+            OVERLAPPED o{};
+            o.Offset = (DWORD) (off + at);
+            o.OffsetHigh = (DWORD) ((off + at) >> 32);
+            DWORD got = 0;
+            if (!ReadFile(h, buf.data(), (DWORD) std::min(kPiece, s.second - at), &got, &o)) break;
+        }
+    }
+    for (HANDLE h : files)
+        if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+}
+#endif
+
 // The mapped file's pages come into this process's page table as they are first read, a fault every few pages,
 // and an expert read through those faults arrives at half the speed: 21.0 against 11.0 ms a token for GLM 5.3
 // Flash's CPU experts on the two-socket Xeon, while every expert a token meets is new to the process.  So one
 // thread reads a byte of every page of the experts, once, beside whatever the engine is doing: the 100 GiB of a
 // model that the file cache holds take it 4 s.  What the cache does not hold is read from the disk here, not
 // while a token waits.
-void map_pages(const std::vector<std::pair<const uint8_t*, size_t>>& spans, const std::atomic<bool>& quit) {
+//
+// On Windows a fault reads only a few pages from the disk: 1.3 GB/s from a laptop's SSD, so the 10 GiB of experts
+// the file cache did not hold took 10 s, and an answer asked meanwhile came at half speed.  The same bytes read
+// through the file cache come at 3.2 GB/s (it reads ahead in large requests), and the mapping shares the cache's
+// pages, so a second thread reads the spans from the file (read_cached()) while this one touches them: from an
+// empty cache it runs ahead and the touches find the pages in memory.  When the cache holds them it only copies
+// what it reads, beside the touches.  PrefetchVirtualMemory() returns at once and brings nothing in.
+void map_pages(const std::vector<std::pair<const uint8_t*, size_t>>& spans, const Shards& model,
+               const std::atomic<bool>& quit) {
+#ifdef _WIN32
+    std::jthread reader(read_cached, std::cref(spans), std::cref(model), std::cref(quit));
+#else
+    (void) model;
     for (const auto& s : spans) {
         if (quit.load(std::memory_order_relaxed)) return;
         strata::platform::advise_willneed(s.first, (uint64_t) s.second);
     }
+#endif
     constexpr size_t kPage = 4096, kLook = size_t(1) << 24;   // `quit` is looked at every 16 MiB
     volatile uint8_t seen = 0;
     for (const auto& s : spans) {
@@ -1025,6 +1071,7 @@ std::unique_ptr<Engine> Engine::open(const Options& o) {
         if (name == "gemma4") return std::make_unique<Gemma4>();
         if (name == "deepseek4") return std::make_unique<DeepSeek4>();
         if (name == "lfm2moe") return std::make_unique<Lfm2Moe>();
+        if (name == "flint") return std::make_unique<Flint>();
         throw std::runtime_error(o.model + " is a '" + name + "' model, which this engine does not run");
     };
     int cards = 1, devices = 1;
@@ -1835,7 +1882,7 @@ void Engine::load(const Options& o) {
     reset();
     // nothing is read from the files when every expert is in VRAM
     if (!all_cached())
-        mapper_ = std::thread([this, spans = std::move(spans)] { map_pages(spans, map_quit_); });
+        mapper_ = std::thread([this, spans = std::move(spans)] { map_pages(spans, *gg_, map_quit_); });
 }
 
 void Engine::load_drafter() {
@@ -1874,6 +1921,7 @@ void Engine::shared_scratch() {
         gu_ = fbuf(rr * 2 * n_ff_exp_);
         hx_ = fbuf(rr * n_ff_exp_);
         dx_ = fbuf(rr * n_embd_);
+        hf_ = fbuf(rr);
     }
 }
 
@@ -2187,8 +2235,16 @@ void Engine::lin(const Dev& w, const float* x, float* y, int n, const void* xq, 
     }
     // a prompt batch: llama.cpp's matrix-matrix kernels read the weights once for all the tokens
     if (mmq_ && n >= kStageRows && Mmq::fits((int) w.type, w.n_out, w.n_in)) {
+        // A row too large for the halves its blocks keep their sums in goes in divided by a power of two, and x is
+        // left as it was for whatever reads it next (both exact): its product comes out divided by the same.
+        const bool guard = half_sum_guard_ && Mmq::half_sums((int) w.type);
+        float* xs = const_cast<float*>(x);
+        if (guard) guard_half_sums(xs, w.n_in, w.n_in, n, hf_, st_);
         Mmq::quantize(x, nullptr, mqx_, (int) w.type, w.n_in, w.n_in, n, st_);
-        return mmq_->mul(w.p, (int) w.type, w.n_out, w.n_in, 0, 1, mqx_, nullptr, nullptr, n, n, y, w.n_out, st_);
+        if (guard) scale_rows(xs, w.n_in, w.n_in, n, nullptr, hf_, false, st_);
+        mmq_->mul(w.p, (int) w.type, w.n_out, w.n_in, 0, 1, mqx_, nullptr, nullptr, n, n, y, w.n_out, st_);
+        if (guard) scale_rows(y, w.n_out, w.n_out, n, nullptr, hf_, false, st_);
+        return;
     }
     if (!xq) {
         // the tokens' blocks are back to back, so they quantize as one long vector
@@ -2646,6 +2702,7 @@ void Engine::moe_rows(Layer& L, int il, int n) {
 
     const float limit = clamp_exp_[(size_t) il];
     const int gt = (int) L.gu_type, dt = (int) L.d_type;
+    const bool guard = half_sum_guard_ && Mmq::half_sums(dt);   // the down rows keep their sums in halves
     const int64_t ff = n_ff_exp_, ff2 = 2 * ff;
     int holds = -1;   // the round in the buffer when this call is done
     // The card's part.  With the CPU's beside it, the rows of its experts' places are left at nothing.
@@ -2676,11 +2733,13 @@ void Engine::moe_rows(Layer& L, int il, int n) {
         if (rc > 0) {
             if (gelu_) geglu_rows(gu_, hx_, n_ff_exp_, rc, st_);
             else swiglu_clamp_rows(gu_, hx_, n_ff_exp_, rc, limit, st_);
+            if (guard) guard_half_sums(hx_, ff, n_ff_exp_, rc, hf_, st_);
             Mmq::quantize(hx_, nullptr, mq2_, dt, ff, ff, rc, st_);
         }
         for (const Run& r : runs_)
             mmq_->mul(slot_of(r.j) + gu2, dt, n_embd_, ff, L.slot_bytes, r.m, mq2_, d_cb + (size_t) r.c * cb_row + r.j,
                       d_place, rc, r.most, dx_, n_embd_, st_);
+        if (guard && rc > 0) scale_rows(dx_, n_embd_, n_embd_, rc, d_place, hf_, false, st_);
 
         // The round the buffer holds goes first and is not copied.  If it holds none of this call's, the experts
         // that go ahead are copied last, so the next call finds them.  The order does not change a round's launches.
@@ -2710,9 +2769,11 @@ void Engine::moe_rows(Layer& L, int il, int n) {
             mmq_->mul(stage_, gt, ff2, n_embd_, gu2, m, mq_, d_bounds + g0, iota_, rg, most, gu_, ff2, st_);
             if (gelu_) geglu_rows(gu_ + (size_t) r0 * ff2, hx_ + (size_t) r0 * ff, n_ff_exp_, rows, st_);
             else swiglu_clamp_rows(gu_ + (size_t) r0 * ff2, hx_ + (size_t) r0 * ff, n_ff_exp_, rows, limit, st_);
+            if (guard) guard_half_sums(hx_ + (size_t) r0 * ff, ff, n_ff_exp_, rows, hf_ + r0, st_);
             Mmq::quantize(hx_ + (size_t) r0 * ff, nullptr, mq2_, dt, ff, ff, rows, st_);
             mmq_->mul(stage_ + down_at, dt, n_embd_, ff, L.d_bytes, m, mq2_, d_rel + (g0 - n_cached + r), d_place + r0,
                       rows, most, dx_, n_embd_, st_);
+            if (guard) scale_rows(dx_, n_embd_, n_embd_, rows, d_place + r0, hf_ + r0, false, st_);
         }
         ck(cudaEventRecord((cudaEvent_t) ev_free_, cs(st_)), "expert staging");
     };

@@ -150,7 +150,7 @@ VISION_START = "<|vision_start|>"
 # turn: strata-poly keeps a checkpoint there (turn_at), which the chat's next request goes on from.  The second one
 # ends the first turn: the system prompt with the tools, which "warm_start" keeps.
 TURN_OPENERS = {"function": ("<|im_start|>",), "gemma": ("<|turn>",),
-                "glm": ("<|system|>", "<|user|>", "<|assistant|>", "<|observation|>"),
+                "glm": ("<|system|>", "<|developer|>", "<|user|>", "<|assistant|>", "<|observation|>"),
                 "dsml": ("<｜User｜>", "<｜Assistant｜>"), "lfm2": ("<|im_start|>",)}
 WARM_MIN_TOKENS = 2048           # a shorter prompt start is quick to read again: not kept
 # #606: a reply that repeats one token this many times in a row is ended there ("length"): a model in a loop, or a
@@ -165,6 +165,13 @@ ANSWER_RESERVE_MIN = 512      # #984: the tokens kept for the answer when a thin
 # and no call, is continued once with the thinking closed (the same way the budget's wrap-up closes it)
 REASONING_CLOSE = "\n</think>\n\n"
 REASONING_WRAP_UP = "\n\nI have thought about this long enough; time to give my answer.\n</think>\n\n"
+
+
+def closed_with(text: str, think_end: str) -> str:
+    """REASONING_CLOSE or REASONING_WRAP_UP for a model whose thinking ends with think_end (OutputParser).  Gemma 4
+    ends it with <channel|>, its answer right after: a </think> there is text inside the thought, and the model
+    thought on until max_tokens (Discussion 60)."""
+    return text if think_end == THINK_END else text.replace(THINK_END + "\n\n", think_end)
 # #728: opt-in handling of reasoning that repeats whole passages (which the single-token guard above cannot see).
 # "reasoning_loop_recovery": "stop" ends the reply there; "recover" (or true) goes on from the same output with the
 # low-effort instruction in place of the xhigh one.  Both off by default.
@@ -3309,7 +3316,7 @@ class Service:
             if key in special}
         # how the model writes a tool call (serve/frontend.py's OutputParser)
         pre = getattr(tokenizer, "pre", "")
-        self.call_format = "glm" if pre in ("glm4", "glm5") else "gemma" if pre == "gemma4" else \
+        self.call_format = "glm" if pre in ("glm4", "glm5", "flint") else "gemma" if pre == "gemma4" else \
             "dsml" if pre in ("joyai-llm", "deepseek-v3") else "lfm2" if pre == "lfm2" else "function"
         self.turn_ids = frozenset(t[0] for t in (tokenizer.encode(s, parse_special=True)
                                                  for s in TURN_OPENERS[self.call_format]) if len(t) == 1)
@@ -3326,9 +3333,11 @@ class Service:
             self.stop_ids |= set(turn_end if len(turn_end) == 1 else [])
             self.think_open_ids = tokenizer.encode("<|channel>thought\n", parse_special=True)
         elif self.call_format == "glm":
+            self.think_open_ids = tokenizer.encode("<think>", parse_special=True)   # GLM's prompt opens it, Flint itself
             # #70: GLM ends its turn with <|user|> and a tool call with <|observation|>, which llama.cpp's converter
             # names eot and eom.  A GGUF can name neither (REAP50-Q3_K_M: eos only), and the reply then runs on.
-            for end in ("<|user|>", "<|observation|>"):
+            # Flint, which writes GLM's tool calls, also opens a developer turn; llama.cpp ends a reply at all three.
+            for end in ("<|user|>", "<|observation|>", "<|developer|>"):
                 ids = tokenizer.encode(end, parse_special=True)
                 self.stop_ids |= set(ids if len(ids) == 1 else [])
         # an image in a prompt (prepare()): the token the template writes for it, which stands for each of its rows;
@@ -4891,7 +4900,7 @@ class Service:
                                     with self.status_lock:
                                         trace["first_token_s"] = round(time.perf_counter() - trace["_clock"], 3)
                                 if t in self.stop_ids:
-                                    if force and parser.state == "reasoning" and parser.buf == THINK_END:
+                                    if force and parser.state == "reasoning" and parser.buf == parser.think_end:
                                         opens = True    # #537: the held </think> was the end: the call opens there
                                         break
                                     finish = "stop"
@@ -5019,12 +5028,12 @@ class Service:
                             continue
                         if (self.reasoning_close_retry and thinking and finish == "stop" and not close_retried
                                 and not answered and not wrap and not opens and parser.state == "reasoning"
-                                and parser.buf != THINK_END         # #537: not after a held </think>, the end
+                                and parser.buf != parser.think_end  # #537: not after a held </think>, the end
                                 and (stops is None or stops.hit is None) and not cancel.is_set()):
                             # #1053: the model wrote its reasoning and stopped before </think>: the client would get
                             # an empty answer.  Close the thinking once and let it answer.
                             close_retried = True
-                            extra = self.tok.encode(REASONING_CLOSE, parse_special=True)
+                            extra = self.tok.encode(closed_with(REASONING_CLOSE, parser.think_end), parse_special=True)
                             if max_new - n - len(extra) >= 1:
                                 print("[strata] the reply ended inside its thinking with no answer: closing the "
                                       "thinking once and continuing (reasoning_close_retry)", flush=True)
@@ -5048,7 +5057,7 @@ class Service:
                         # thinking ended, after the blank line the template puts before a call.
                         if wrap:
                             budget = st["thinking_budget"] = None
-                            text = REASONING_WRAP_UP + (force or "")
+                            text = closed_with(REASONING_WRAP_UP, parser.think_end) + (force or "")
                         else:
                             text = "\n" * (2 - (len(tail) - len(tail.rstrip("\n")))) + force
                         force = None

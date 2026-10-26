@@ -25,6 +25,17 @@ void gemv_bf16(const uint16_t* w, const float* x, float* y, int n_in, int n_out,
 void gemm_f32(void* blas, const float* w, const float* x, float* y, int n_in, int n_out, int rows_per_x, int rows);
 /// n BF16 values as floats, for gemm_f32.
 void bf16_to_f32(const uint16_t* w, float* out, size_t n, void* stream);
+/// Before a Q8_1 quantization whose blocks keep their sums in halves (llama.cpp's MMQ for Q4_K, Q5_K, Q2_K, Q4_1,
+/// Q5_1 and IQ1_S rows; Mmq::half_sums()): each of the rows of x (ld floats apart, width values) whose sums or
+/// values would leave a half's range is divided by a power of two, and factor[r] holds it (1 for the others).  A
+/// SwiGLU's output can be that large: Flint's reaches 45,000, and a block of 32 summed past 65,504 is infinite.
+/// The products of the divided rows are the true ones divided by the same power, to the bit: scale_rows() puts
+/// them back.
+void guard_half_sums(float* x, int64_t ld, int width, int rows, float* factor, void* stream);
+/// The rows of y (ld floats apart, row r at row place[r] when place is given) multiplied by factor[r], or divided
+/// by it; a row whose factor is 1 is not touched.
+void scale_rows(float* y, int64_t ld, int width, int rows, const int32_t* place, const float* factor, bool divide,
+                void* stream);
 
 /// RMS norm over each of `rows` groups of n values: y = x / sqrt(mean(x^2) + eps) * w.  `w` (n values, shared by the
 /// rows) may be null.  A row of y starts y_stride values after the one before it (0: n), so two calls can fill
@@ -229,17 +240,19 @@ struct Kvq8 {
 /// window - 1 + rows of them.
 /// With `at`, the tokens start at the position the card holds there; the launches are sized for `room` rows,
 /// which must be no fewer than a launch's tokens attend between them, and score has room for them.
-/// score_floats: the floats score holds, when more than the above.  Heads of 64 values in groups of 4 over the
-/// whole conversation then take a launch block each block of rows, where score has room for those blocks' sums
-/// of chunk tokens at the longest the call can attend (attend_split_floats()); the results differ from the other
-/// kernels' in the last bits.
+/// score_floats: the floats score holds, when more than the above.  Heads of 64 values in groups of 4, or of 128 in
+/// groups of 8, over the whole conversation then take a launch block each block of rows, a launch as many tokens as
+/// score has room for those blocks' sums of at the longest the call can attend (attend_split_floats() for chunk of
+/// them); the results differ from the other kernels' in the last bits.
 /// With `kq8` or `vq8` (codes not null) that cache is read as Q8_0 rather than fp16: its codes/scale pointers
 /// follow the same row and head index the fp16 cache would, and a block of 32 values dequantizes as
 /// `(float)codes[..] * __half2float(scales[..])`.  The fp16 path is unchanged where they are left null.
+/// With `sinks` (n_head floats on the card, flint's), each head's softmax has one more logit, its sink, which
+/// weighs no value: it only takes weight from the rows.
 void attend(const float* q, const uint16_t* kcache, const uint16_t* vcache, int64_t pos, int rows, float* score,
             int chunk, float* out, int dim, int n_head, int kv_heads, float scale, void* stream, int window = 0,
             int ring = 0, bool whole = false, const long long* at = nullptr, int room = 0, size_t score_floats = 0,
-            Kvq8 kq8 = {}, Kvq8 vq8 = {});
+            Kvq8 kq8 = {}, Kvq8 vq8 = {}, const float* sinks = nullptr);
 /// The floats of score that attend()'s blocks of rows take for calls of up to chunk tokens attending up to max_rows
 /// rows (score_floats): with that much a model's every call takes them.
 size_t attend_split_floats(int chunk, int n_head, int max_rows, int dim);
@@ -252,16 +265,20 @@ size_t attend_split_floats(int chunk, int n_head, int max_rows, int dim);
 /// must hold 2 * n_head floats.  work: rows * n_head * (dim + dim / 2 + 3) + 1 floats.  Throws
 /// std::runtime_error.
 /// Heads of 64 values in groups of 4 over the whole conversation take one kernel instead, which keeps the scores in
-/// registers, on NVIDIA cards from Turing on; it uses neither blas, score nor work.
+/// registers, on NVIDIA cards from Turing on; it uses neither blas, score nor work.  So do heads of 128 values in
+/// groups of 8, with a window, a ring and sinks too, from Ampere on; a token's keys go in blocks of 64 counted from
+/// the cache's first row, so its result is the same whatever tokens the call has beside it.
 /// With `kq8` or `vq8` (codes not null) that cache is read as Q8_0 like attend(): before each block of `m` keys
 /// the product reads, its rows are dequantized into the fp16 workspace `kwork` / `vwork`, and the products then
 /// read that exactly as they read an fp16 cache, so the results match attend()'s q8 read.  Each workspace holds
 /// work_halves halves, `work_halves / (kv_heads * dim)` rows at most: a block of keys larger than that is split,
 /// taking more products.  The fp16 path (both null) is unchanged and reads the caches where they lie.
+/// `sinks` as attend()'s: the sink joins each token's sum after the last block of rows.
 void attend_batch(void* blas, const float* q, const uint16_t* kcache, const uint16_t* vcache, int64_t pos, int rows,
                   float* score, size_t score_floats, float* work, float* out, int dim, int n_head, int kv_heads,
                   float scale, void* stream, int window = 0, int ring = 0, bool whole = false, Kvq8 kq8 = {},
-                  Kvq8 vq8 = {}, uint16_t* kwork = nullptr, uint16_t* vwork = nullptr, size_t work_halves = 0);
+                  Kvq8 vq8 = {}, uint16_t* kwork = nullptr, uint16_t* vwork = nullptr, size_t work_halves = 0,
+                  const float* sinks = nullptr);
 /// attend() over int8 caches (store_int8): the same attention, the same order of products and sums.  `q8` is scratch
 /// in the same form for this call's queries (rows * n_head * dim / kQ8_0Values blocks of codes, and as many
 /// deltas).  A score is a dp4a of a lane's own run of codes - the query's against the key's, both 4-aligned - and

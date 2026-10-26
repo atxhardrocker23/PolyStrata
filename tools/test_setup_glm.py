@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -179,6 +180,20 @@ class Config(unittest.TestCase):
                     self.assertIsNone(setup.find_tool("ninja"))
                 run.assert_not_called()
 
+    def test_a_build_folder_keeps_its_cuda_compiler_spelling(self):
+        # nvcc.exe against nvcc.EXE: CMake would delete the cache and configure without the other -D options
+        with tempfile.TemporaryDirectory() as t:
+            nvcc = Path(t) / "nvcc"
+            nvcc.write_text("")
+            (Path(t) / "CMakeCache.txt").write_text(f"CMAKE_CUDA_COMPILER:FILEPATH={nvcc}\n")
+            other = os.path.join(t, ".", "nvcc")   # the same file, written another way
+            defs = ["-DSTRATA_ENABLE_CUDA=ON", f"-DCMAKE_CUDA_COMPILER={other}"]
+            self.assertEqual(setup.cached_compiler(t, defs), ["-DSTRATA_ENABLE_CUDA=ON", f"-DCMAKE_CUDA_COMPILER={nvcc}"])
+            (Path(t) / "nvcc2").write_text("")
+            another = [f"-DCMAKE_CUDA_COMPILER={Path(t) / 'nvcc2'}"]
+            self.assertEqual(setup.cached_compiler(t, another), another)   # another compiler: as given
+            self.assertEqual(setup.cached_compiler(Path(t) / "none", defs), defs)   # no cache: as given
+
     def test_a_tool_whose_launcher_names_a_moved_folder_is_installed_again(self):
         # issue 78: .venv\Scripts\cmake.exe named the Python of the folder before it was moved and did not start
         with tempfile.TemporaryDirectory() as t:
@@ -203,6 +218,8 @@ class Config(unittest.TestCase):
             self.assertEqual(setup.poly_saved_conv([None, p]), 0)
             p.write_text(json.dumps({"args": ["--conversation-cache-mib", "4096", "--model", "m.gguf"]}))
             self.assertEqual(setup.poly_saved_conv([p]), 4096)
+            p.write_text(json.dumps({"args": ["--conversation-cache-mib", "auto", "--model", "m.gguf"]}))
+            self.assertEqual(setup.poly_saved_conv([p]), "auto")
 
 
 class Main(unittest.TestCase):
@@ -308,7 +325,7 @@ class Main(unittest.TestCase):
         self.assertEqual(args[args.index("--max-context") + 1], "32768")
         self.assertEqual(Path(args[args.index("--expert-profile") + 1]), pack / "expert-profile.txt")
         self.assertEqual(Path(args[args.index("--draft-model") + 1]), block)
-        self.assertEqual(args[args.index("--conversation-cache-mib") + 1], "8192")
+        self.assertEqual(args[args.index("--conversation-cache-mib") + 1], "auto")
         for flag in ("--pack", "--native", "--mtp", "--kv", "--vision", "--pool-workers", "--prefill"):
             self.assertNotIn(flag, args)
         self.assertEqual(cfg["model_name"], "glm-5.3-flash-3.0bit")

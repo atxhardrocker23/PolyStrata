@@ -2094,15 +2094,15 @@ if(STRATA_NATIVE_EXPERTS AND (STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP) AND NOT S
     # Optional model/state check; run by hand with an MTP GGUF and frozen prompt IDs.
     add_executable(poly_gdn_mma_state_test src/poly/gdn_mma_state_test.cpp src/poly/engine.cpp src/poly/glm5next.cpp
                    src/poly/qwen35.cpp src/poly/gemma4.cpp src/poly/deepseek4.cpp src/poly/lfm2moe.cpp
-                   src/poly/cpu_experts.cpp src/poly/kernels.cu src/poly/kernels_dsv4.cu src/core/conversation_memory.cpp)
+                   src/poly/flint.cpp src/poly/cpu_experts.cpp src/poly/kernels.cu src/poly/kernels_dsv4.cu src/core/conversation_memory.cpp)
     target_include_directories(poly_gdn_mma_state_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${_strata_gpu_include_directories})
     target_link_libraries(poly_gdn_mma_state_test PRIVATE strata_poly_mmq strata_kernels strata_spec ggml-cpu ggml-base
                          ${_strata_gpu_blas_target} ${_strata_gpu_runtime_target} CUDA::cuda_driver Threads::Threads)
   endif()
 
   add_executable(strata-poly src/poly/main.cpp src/poly/engine.cpp src/poly/glm5next.cpp src/poly/qwen35.cpp
-                            src/poly/gemma4.cpp src/poly/deepseek4.cpp src/poly/lfm2moe.cpp src/poly/cpu_experts.cpp
-                            src/poly/kernels.cu src/poly/kernels_dsv4.cu src/core/conversation_memory.cpp)
+                            src/poly/gemma4.cpp src/poly/deepseek4.cpp src/poly/lfm2moe.cpp src/poly/flint.cpp
+                            src/poly/cpu_experts.cpp src/poly/kernels.cu src/poly/kernels_dsv4.cu src/core/conversation_memory.cpp)
   target_include_directories(strata-poly PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${_strata_gpu_include_directories})
   # the driver's virtual memory calls: the attention caches grow with the conversation; on HIP they are HIP's
   # memory management calls, which the HIP runtime itself provides (hip_compat/cuda.h)
@@ -2129,8 +2129,8 @@ if(STRATA_NATIVE_EXPERTS AND (STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP) AND NOT S
   # poly_draft_race_test MODEL.gguf [RUNS] [LAYER_SPLIT]
   add_executable(poly_draft_race_test src/poly/draft_race_test.cpp src/poly/engine.cpp src/poly/glm5next.cpp
                                       src/poly/qwen35.cpp src/poly/gemma4.cpp src/poly/deepseek4.cpp
-                                      src/poly/lfm2moe.cpp src/poly/cpu_experts.cpp src/poly/kernels.cu src/poly/kernels_dsv4.cu
-                                      src/core/conversation_memory.cpp)
+                                      src/poly/lfm2moe.cpp src/poly/flint.cpp src/poly/cpu_experts.cpp src/poly/kernels.cu
+                                      src/poly/kernels_dsv4.cu src/core/conversation_memory.cpp)
   target_include_directories(poly_draft_race_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
                                                          ${_strata_gpu_include_directories})
   target_link_libraries(poly_draft_race_test PRIVATE strata_poly_mmq strata_kernels strata_spec ggml-cpu ggml-base
@@ -2157,6 +2157,11 @@ if(STRATA_NATIVE_EXPERTS AND (STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP) AND NOT S
   target_include_directories(poly_attend_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
                                                      ${_strata_gpu_include_directories})
   target_link_libraries(poly_attend_test PRIVATE ${_strata_gpu_blas_target} ${_strata_gpu_runtime_target})
+  # attend_batch() against attend() with Flint's heads, sinks and window ring; needs a card
+  add_executable(poly_sink_attend_test src/poly/sink_attend_test.cu src/poly/kernels.cu)
+  target_include_directories(poly_sink_attend_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                                                          ${_strata_gpu_include_directories})
+  target_link_libraries(poly_sink_attend_test PRIVATE ${_strata_gpu_blas_target} ${_strata_gpu_runtime_target})
   # fattn_q8() and fattn_f16() (llama.cpp's flash-attention kernel) against attend_batch(), and with `dec` fdec_q8()
   # against attend(); needs a card, run by hand
   add_executable(poly_fattn_test src/poly/fattn_test.cu src/poly/kernels.cu)
