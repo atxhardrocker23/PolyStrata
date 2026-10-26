@@ -3496,6 +3496,15 @@ class Service:
             for old in (old_engine, old_vision):          # first: the two models do not fit in memory together
                 if old is not None and hasattr(old, "unload"):
                     old.unload()
+            # On Windows, the NVIDIA driver/WDDM releases GPU page tables and VRAM asynchronously.
+            # Wait for VRAM to return to the card before spawning the next model to avoid cudaErrorMemoryAllocation.
+            if os.name == "nt":
+                t_w = time.monotonic()
+                while time.monotonic() - t_w < 5.0:
+                    fv = self.free_vram_mib()
+                    if fv is not None and fv >= 6000:
+                        break
+                    time.sleep(0.5)
             freed = self.free_vram_mib() if debug else None
             try:
                 engine, vision, sampling_defaults, effort_end, groups = start_model(cfg, tok)
