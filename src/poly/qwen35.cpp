@@ -534,9 +534,10 @@ void Qwen35::route(int il, const float* logits, int32_t, int* ids, float* w, flo
     for (int e = 0; e < n_expert_; ++e) all += probs[e] = std::exp(logits[e] - mx);
     const float inv = (float) (1.0 / all);
     float* pick = probs;
-    if (opt_.cache_bias > 0.f && (size_t) il < layers_.size() && !layers_[(size_t) il].slot.empty()) {
+    const float cb = layer_cache_bias(il);
+    if (cb > 0.f && (size_t) il < layers_.size() && !layers_[(size_t) il].slot.empty()) {
         const auto& slots = layers_[(size_t) il].slot;
-        const float b_mul = std::exp(opt_.cache_bias);
+        const float b_mul = std::exp(cb);
         pick = probs + n_expert_;
         for (int e = 0; e < n_expert_; ++e) pick[e] = slots[(size_t) e] ? probs[e] * b_mul : probs[e];
     }

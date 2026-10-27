@@ -1725,7 +1725,11 @@ void Engine::follow(int written) {
         n_free += s.at.load() == Swap::kFree;
     }
     if (written <= 0) return;
-    const float keep = std::exp2(-(float) written / (float) kSwapHalf);
+    static const int swap_half = [] {
+        const char* v = std::getenv("STRATA_SWAP_HALF");
+        return (v && std::atoi(v) > 0) ? std::atoi(v) : kSwapHalf;
+    }();
+    const float keep = std::exp2(-(float) written / (float) swap_half);
     for (float& r : recent_) r *= keep;
     if (n_free == 0) return;
 
@@ -1819,6 +1823,9 @@ void Engine::load(const Options& o) {
         throw std::runtime_error("--skip-weight is a share of a token's experts' weight: 0 (off) up to below 1");
     if (opt_.cache_bias < 0.f)
         throw std::runtime_error("--cache-bias (STRATA_CACHE_BIAS) cannot be negative");
+    if (const char* cbo = std::getenv("STRATA_CACHE_BIAS_OUTER")) {
+        if (opt_.cache_bias_outer < 0.f) opt_.cache_bias_outer = (float) std::atof(cbo);
+    }
     if (opt_.dump || std::min(opt_.prompt_batch, opt_.max_context) == 1) opt_.window = 1;
     const char* stream_stage = std::getenv("STRATA_POLY_STREAM_STAGE");
     const bool requested_stream_stage = stream_stage && std::atoi(stream_stage) == 1;

@@ -1,0 +1,8 @@
+Windows Registry Editor Version 5.00
+
+; PolyStrata Hardware Optimization: Set WDDM TDR Delay to 60 seconds
+; Prevents Windows Display Driver resets during heavy 64K-128K context prompt prefills
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\GraphicsDrivers]
+"TdrDelay"=dword:0000003c
+"TdrDdiDelay"=dword:0000003c

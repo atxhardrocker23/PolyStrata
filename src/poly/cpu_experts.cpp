@@ -37,8 +37,14 @@ constexpr int kRowsPerTask = 32;
 constexpr int kRowsPerDownTask = 32;
 // Each row's dot products first ask for the row this many rows on in the same task, which the hardware prefetcher
 // does not see coming across the rows of several experts
-constexpr int kPrefetchRows = 2;
-constexpr int kSpinsBeforeSleep = 20000;   // about a millisecond of pause instructions
+constexpr int kPrefetchRows = 4;
+inline int spins_before_sleep() {
+    static const int spins = [] {
+        const char* v = std::getenv("STRATA_CPU_SPIN");
+        return (v && std::atoi(v) > 0) ? std::atoi(v) : 200000;   // ~3-5 ms on Alder Lake to bridge GPU attention without sleeping
+    }();
+    return spins;
+}
 constexpr int kMaxMultiTok = 8;
 
 const ggml_type_traits_cpu* traits(int type) { return ggml_get_type_traits_cpu((ggml_type) type); }
@@ -744,7 +750,7 @@ void Workers::loop() {
             }
             seen = now;
         }
-        if (++idle < kSpinsBeforeSleep) {
+        if (++idle < spins_before_sleep()) {
             _mm_pause();
             continue;
         }

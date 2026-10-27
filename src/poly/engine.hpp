@@ -91,6 +91,7 @@ struct Options {
                                   ///< out (--skip-weight); 0: tail_skip decides
     float cache_bias = 0;         ///< router logit bonus added to VRAM-resident experts before top-k selection, while
                                   ///< keeping unbiased logits for combine weights (--cache-bias, STRATA_CACHE_BIAS)
+    float cache_bias_outer = -1.f;///< outer layers router logit bonus (layers [0..3] and [N-2..N-1]); -1: use cache_bias (--cache-bias-outer, STRATA_CACHE_BIAS_OUTER)
     std::string layer_split;      ///< the layers across the CUDA devices this process sees, in their order: "auto"
                                   ///< (by each card's free VRAM) or the first layer of each later card ("20,30");
                                   ///< empty, or one device: the current card alone
@@ -233,6 +234,15 @@ public:
     /// buffer.  window() and step() do it too, if the caller has not.
     void end_read() {
         if (stage_lent_) narrow_stage();
+    }
+
+    /// Router logit bonus for layer il: respects --cache-bias-outer for outer layers [0..3] and [N-2..N-1].
+    float layer_cache_bias(int il) const {
+        if (opt_.cache_bias <= 0.f) return 0.f;
+        if (opt_.cache_bias_outer < 0.f) return opt_.cache_bias;
+        const int n = n_layer_;
+        if (il < 4 || il >= n - 2) return opt_.cache_bias_outer;
+        return opt_.cache_bias;
     }
 
     /// Whether the architecture reads pictures.

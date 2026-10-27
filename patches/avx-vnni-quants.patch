@@ -1,0 +1,76 @@
+--- a/ggml/src/ggml-cpu/arch/x86/quants.c
++++ b/ggml/src/ggml-cpu/arch/x86/quants.c
+@@ -950,6 +950,14 @@ static void ggml_vec_dot_mxfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
+                                               _mm_shuffle_epi8(values128, _mm_and_si128(q4bits_1, m4b)));
+         const __m256i q4b_2 = MM256_SET_M128I(_mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits_2, 4), m4b)),
+                                               _mm_shuffle_epi8(values128, _mm_and_si128(q4bits_2, m4b)));
++#if defined(__AVXVNNI__)
++        const __m256i ax_1 = _mm256_sign_epi8(q4b_1, q4b_1);
++        const __m256i sy_1 = _mm256_sign_epi8(q8b_1, q4b_1);
++        const __m256i ax_2 = _mm256_sign_epi8(q4b_2, q4b_2);
++        const __m256i sy_2 = _mm256_sign_epi8(q8b_2, q4b_2);
++        const __m256i p_1 = _mm256_dpbusd_avx_epi32(_mm256_setzero_si256(), ax_1, sy_1);
++        const __m256i p_2 = _mm256_dpbusd_avx_epi32(_mm256_setzero_si256(), ax_2, sy_2);
++#else
+         const __m256i p16_1 = mul_add_epi8(q4b_1, q8b_1);
+         const __m256i p16_2 = mul_add_epi8(q4b_2, q8b_2);
+         const __m256i p_1 = _mm256_madd_epi16(p16_1, mone);
+         const __m256i p_2 = _mm256_madd_epi16(p16_2, mone);
++#endif
+@@ -3468,6 +3476,12 @@ static void ggml_vec_dot_iq3_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
+ 
+             const uint16_t ls1 = x[i].scales[ib32/2] & 0xf;
+             const uint16_t ls2 = x[i].scales[ib32/2] >>  4;
++#if defined(__AVXVNNI__)
++            const __m256i dot1 = _mm256_dpbusd_avx_epi32(_mm256_setzero_si256(), q2_1, q8s_1);
++            const __m256i dot2 = _mm256_dpbusd_avx_epi32(_mm256_setzero_si256(), q2_2, q8s_2);
++            const __m256i p1 = _mm256_mullo_epi32(dot1, _mm256_set1_epi32(2*ls1+1));
++            const __m256i p2 = _mm256_mullo_epi32(dot2, _mm256_set1_epi32(2*ls2+1));
++#else
+             const __m256i dot1  = _mm256_maddubs_epi16(q2_1, q8s_1);
+             const __m256i dot2  = _mm256_maddubs_epi16(q2_2, q8s_2);
+             const __m256i p1 = _mm256_madd_epi16(dot1, _mm256_set1_epi16(2*ls1+1));
+             const __m256i p2 = _mm256_madd_epi16(dot2, _mm256_set1_epi16(2*ls2+1));
++#endif
+@@ -3960,6 +3974,14 @@ static void ggml_vec_dot_iq4_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
+                                               _mm_shuffle_epi8(values128, _mm_and_si128(q4bits_1, m4b)));
+         const __m256i q4b_2 = MM256_SET_M128I(_mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits_2, 4), m4b)),
+                                               _mm_shuffle_epi8(values128, _mm_and_si128(q4bits_2, m4b)));
++#if defined(__AVXVNNI__)
++        const __m256i ax_1 = _mm256_sign_epi8(q4b_1, q4b_1);
++        const __m256i sy_1 = _mm256_sign_epi8(q8b_1, q4b_1);
++        const __m256i ax_2 = _mm256_sign_epi8(q4b_2, q4b_2);
++        const __m256i sy_2 = _mm256_sign_epi8(q8b_2, q4b_2);
++        const __m256i p_1 = _mm256_dpbusd_avx_epi32(_mm256_setzero_si256(), ax_1, sy_1);
++        const __m256i p_2 = _mm256_dpbusd_avx_epi32(_mm256_setzero_si256(), ax_2, sy_2);
++#else
+         const __m256i p16_1 = mul_add_epi8(q4b_1, q8b_1);
+         const __m256i p16_2 = mul_add_epi8(q4b_2, q8b_2);
+         const __m256i p_1 = _mm256_madd_epi16(p16_1, mone);
+         const __m256i p_2 = _mm256_madd_epi16(p16_2, mone);
++#endif
+@@ -4052,6 +4074,16 @@ static void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
+                                                   _mm_shuffle_epi8(values128, _mm_and_si128(q4bits_1, m4b)));
+             const __m256i q4b_2 = MM256_SET_M128I(_mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits_2, 4), m4b)),
+                                                   _mm_shuffle_epi8(values128, _mm_and_si128(q4bits_2, m4b)));
++#if defined(__AVXVNNI__)
++            const __m256i ax_1 = _mm256_sign_epi8(q4b_1, q4b_1);
++            const __m256i sy_1 = _mm256_sign_epi8(q8b_1, q4b_1);
++            const __m256i ax_2 = _mm256_sign_epi8(q4b_2, q4b_2);
++            const __m256i sy_2 = _mm256_sign_epi8(q8b_2, q4b_2);
++            const __m256i dot_1 = _mm256_dpbusd_avx_epi32(_mm256_setzero_si256(), ax_1, sy_1);
++            const __m256i dot_2 = _mm256_dpbusd_avx_epi32(_mm256_setzero_si256(), ax_2, sy_2);
++            const int16_t ls1 = ((x[ibl].scales_l[ib/2] & 0xf) | ((sh << 4) & 0x30)) - 32;
++            const int16_t ls2 = ((x[ibl].scales_l[ib/2] >>  4) | ((sh << 2) & 0x30)) - 32;
++            sh >>= 4;
++            const __m256i p_1 = _mm256_mullo_epi32(dot_1, _mm256_set1_epi32(ls1));
++            const __m256i p_2 = _mm256_mullo_epi32(dot_2, _mm256_set1_epi32(ls2));
++#else
+             const __m256i p16_1 = mul_add_epi8(q4b_1, q8b_1);
+             const __m256i p16_2 = mul_add_epi8(q4b_2, q8b_2);
+             const int16_t ls1 = ((x[ibl].scales_l[ib/2] & 0xf) | ((sh << 4) & 0x30)) - 32;
+             const int16_t ls2 = ((x[ibl].scales_l[ib/2] >>  4) | ((sh << 2) & 0x30)) - 32;
+             sh >>= 4;
+             const __m256i p_1 = _mm256_madd_epi16(p16_1, _mm256_set1_epi16(ls1));
+             const __m256i p_2 = _mm256_madd_epi16(p16_2, _mm256_set1_epi16(ls2));
++#endif

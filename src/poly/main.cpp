@@ -1184,6 +1184,7 @@ int main(int argc, char** argv) {
         else if (a == "--tail-skip") o.tail_skip = std::atoi(val());
         else if (a == "--skip-weight") o.skip_weight = (float) std::atof(val());
         else if (a == "--cache-bias") o.cache_bias = (float) std::atof(val());
+        else if (a == "--cache-bias-outer") o.cache_bias_outer = (float) std::atof(val());
         else if (a == "--layer-split") o.layer_split = val();
         else if (a == "--batch" || a == "--slots") o.batch = std::atoi(val());
         else if (a == "--check-batch") check = std::atoi(val());
@@ -1239,6 +1240,7 @@ int main(int argc, char** argv) {
     // over --tail-skip, as Strata's engine reads it: =0 turns a model's default off
     if (const char* v = std::getenv("STRATA_ROUTE_TAIL_SKIP")) o.tail_skip = std::atoi(v);
     if (const char* v = std::getenv("STRATA_CACHE_BIAS")) o.cache_bias = (float) std::atof(v);
+    if (const char* v = std::getenv("STRATA_CACHE_BIAS_OUTER")) o.cache_bias_outer = (float) std::atof(v);
     const long long most = 1LL << 24;   // MiB: 16 TiB
     if (cache.o.checkpoints < 0 || cache.o.every < 0 || cache.o.park_mib < 0 || cache.o.park_mib > most ||
         cache.o.park_slots < 0 || cache.o.park_slots > 1024 || cache.o.park_min < 0 || cache.min_free_mib < 0 ||
@@ -1264,10 +1266,16 @@ int main(int argc, char** argv) {
                                  "at place %d or later among its experts is left out; STRATA_ROUTE_TAIL_SKIP=0 turns "
                                  "it off\n",
                          o.tail_skip, o.tail_skip + 1);
-        if (o.cache_bias > 0.f)
-            std::fprintf(stderr, "strata-poly: cache bias %.3f: VRAM-resident experts receive +%.3f selection bonus "
-                                 "(unbiased combine weights; STRATA_CACHE_BIAS=0 turns it off)\n",
-                         o.cache_bias, o.cache_bias);
+        if (o.cache_bias > 0.f) {
+            if (o.cache_bias_outer >= 0.f)
+                std::fprintf(stderr, "strata-poly: cache bias %.3f (outer layers %.3f): VRAM-resident experts receive selection bonus "
+                                     "(unbiased combine weights; STRATA_CACHE_BIAS=0 turns it off)\n",
+                             o.cache_bias, o.cache_bias_outer);
+            else
+                std::fprintf(stderr, "strata-poly: cache bias %.3f: VRAM-resident experts receive +%.3f selection bonus "
+                                     "(unbiased combine weights; STRATA_CACHE_BIAS=0 turns it off)\n",
+                             o.cache_bias, o.cache_bias);
+        }
         // Pages on another node than the threads are read at about two thirds of the speed.  The file cache puts a
         // page on the node of whatever read it first, so a file read back by something else lands on any.
         const bool far = engine.numa_share() > 0.0 && engine.numa_share() < 0.95;
