@@ -876,6 +876,17 @@ int serve(Session& ss) {
             std::fflush(stdout);
             continue;
         }
+        // STRATA_REQUEST_LINES=1: one stdout line per finished request, like Strata's own engine (the same summary, to
+        // the log on stderr so echo_requests picks it up): prompts, cached, fresh tokens read, and both rates.  Any
+        // drafts go in the tail (the server reads them from that; DONE below is what it uses for its figures).
+        const double pp = r.prompt_ms > 0 ? 1000.0 * r.read / r.prompt_ms : 0.0;
+        const double tg = r.decode_ms > 0 ? 1000.0 * r.produced / r.decode_ms : 0.0;
+        std::fprintf(stderr, "strata serve: prompt %lld tokens = %lld reused + %lld read in %.0f ms (%.1f tok/s), %lld generated in %.0f ms (%.1f tok/s)",
+                     n, (long long) r.resume, (long long) r.read, r.prompt_ms, pp, (long long) r.produced, r.decode_ms, tg);
+        if (r.guessed > 0)   // MTP drafts: the ones guessed right of the total guesses made
+            std::fprintf(stderr, ", drafts accepted %lld of %lld\n", (long long) r.guessed_right, (long long) r.guessed);
+        else
+            std::fprintf(stderr, "\n");
         // DONE <generated> <prompt> <prompt ms> <decode ms> <finish> <drafts accepted> <drafts offered> <reused>
         //      <experts from VRAM> <experts> <RAM blobs> <file blobs> <file MB> <prompt tokens read> <offloaded>
         const strata::poly::Stats& now = engine.stats();
@@ -1058,8 +1069,8 @@ void usage() {
                  "                         the conversation grows, the expert cache having the rest until then)\n"
                  "  --kv fmt               the K and V attention caches' format, opt-in: fp16 (default,\n"
                  "                         unchanged); q8_0 (ggml Q8_0 blocks: half the KV VRAM, slightly\n"
-                 "                         different answers; qwen35moe's); int8 / int8k (Gemma 4's: the same\n"
-                 "                         Q8_0 rule with the codes and their deltas in two arrays, so a\n"
+                 "                         different answers; qwen35moe's and kolibri1's); int8 / int8k (Gemma 4's:\n"
+                 "                         the same Q8_0 rule with the codes and their deltas in two arrays, so a\n"
                  "                         reader takes four codes to a load; int8k keeps the keys' side\n"
                  "                         quantized and the values' in fp16)\n"
                  "  --expert-swaps N       while an answer is written, up to N experts it keeps using are on their way\n"

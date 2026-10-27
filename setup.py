@@ -80,6 +80,7 @@ HF_REVISIONS = {
     "unsloth/GLM-5.3-Flash-GGUF": "621d456e93e926e4b52f85cff5f634358c1828f9",                          # 2026-10-05
     "mudler/Ornith-1.5-35B-A3B-APEX-MTP-GGUF": "4c326713c52d13fdb40983a2a09a46cca8e88739",             # 2026-10-05
     "unsloth/gemma-4-26B-A4B-it-GGUF": "c099eb48e663fd284577b04978a94ffccb261841",                     # 2026-10-05
+    "unsloth/gemma-4-26B-A4B-it-qat-GGUF": "7b92b5b28818151e8669af2e45e88d6086f490dd",                 # 2026-10-26
     "peculiar-ragdoll/Tiel-Coder-35B-A3B-GGUF-MTP": "bbe9e566f39e4fc9652ac66b71968289a03c520a",        # 2026-09-10
     "unsloth/Qwen3.6-35B-A3B-MTP-GGUF": "5bc3e238d916f48a861bac2f8a1990a0e9b7e98d",                  # 2026-10-12
     "unsloth/DeepSeek-V4-Flash-0731-GGUF": "fbbb5b93fb787c21338159b0af3318bb3f4d9768",               # 2026-10-15
@@ -87,6 +88,7 @@ HF_REVISIONS = {
     "LiquidAI/LFM2.5-24B-A2B-GGUF": "0912d33141f77e10705345a6732bfd83f0252fdc",                       # 2026-10-15
     "unsloth/flint-GGUF": "20468edfc38ab43d6914cc88b08cbecb05d0fc62",                                 # 2026-10-21
     "openbmb/MiniCPM-V-4.7-35B-A3B-gguf": "77f6d8cb08b2b115ce27d2e2ac1359e126921689",                   # 2026-10-12
+    "Hob-forge/Kolibri-1-GGUF": "40eaa5cf6cfca3afaf8b8832bac962652edb0bde",                              # 2026-10-08
 }
 
 
@@ -584,6 +586,37 @@ FAMILIES = {
                          (36319999424, "086231093581c67f8bf2964f8b49198889c4f0775b39857ba63b4c37041279c2"),
                          "flint-Q8_0.gguf":
                          (42301076928, "5df42b56859c7b5142228005d7d63c327ec9e34c99c72548016d805309a0d284")}},
+    # Kolibri 1 (llama.cpp's "kolibri1") on strata-poly: Aleph Alpha's mixture of experts, German and English, in
+    # Hob-forge's independent GGUF conversion (not made or endorsed by Aleph Alpha or the llama.cpp project), which
+    # needs the kolibri1 patch.  One and two 32 GB Tesla V100-SXM2 cards wrote 91 and 93 tokens/s and read a 32K
+    # prompt at 1,017 and 2,179 tokens/s (first token 32.7 and 15.3 s); a 12 GB RTX 3060 with 24 GB of RAM ran it on Windows.
+    # "vram_beside_gb" was measured on the V100 cards at a 32K context; "row_bytes": 10 of the 50 layers keep their
+    # whole past, 2,048 B a token each, and 40 are a 513-token window.  Only the single-file sizes are listed.
+    "kolibri": {"title": "Kolibri 1", "by": "Aleph Alpha; GGUF by Hob-forge",
+                "about": "on the strata-poly engine, with the kolibri1 patch: Linux or Windows, one or two NVIDIA cards "
+                         "(run on 32 GB, and on 12 GB under Windows); a 48 GB file, ~52 GB of RAM beside an 8 GB card; "
+                         "two other sizes too, no images",
+                "hf": hf("Hob-forge/Kolibri-1-GGUF"), "file": "Kolibri-1-{q}.gguf", "shards": 1,
+                 "tag": "kolibri1-", "name": "kolibri-1", "engine": "poly", "vision": False, "experimental": True,
+                 "windows": True, "ran_on_gb": 12, "row_bytes": 20480,
+                 # its template writes a call as a JSON object inside the <tool_call> wrapper; the server reads that
+                 # form with the recovery (the same path as a call written next to the template's form)
+                 "tool_call_recovery": True,
+                "models": {"Q4_K_M": {"about": "4-bit: Q4_K gate/up, Q6_K down on half the layers",
+                                      "download_gb": 47.5, "ram_gb": 52, "arena_gb": 45.7,
+                                      "vram_beside_gb": 4.1},
+                           "Q2_K": {"about": "2-bit, the fastest: the least RAM",
+                                    "download_gb": 28.6, "ram_gb": 33, "arena_gb": 26.9,
+                                    "vram_beside_gb": 4.1},
+                           "Q3_K_M": {"about": "3-bit: the least RAM that still reads well",
+                                      "download_gb": 37.5, "ram_gb": 42, "arena_gb": 35.8,
+                                      "vram_beside_gb": 4.1}},
+                "sha256": {"Kolibri-1-Q4_K_M.gguf":
+                           (47454113472, "c2ac1301424441ef210b6de50ce25e8ccf69f86494df53d6ba52ed558456062e"),
+                           "Kolibri-1-Q2_K.gguf":
+                           (28634017760, "de2fac5230621125f0309046175a17f8cc554ee2fc2a199c0e6528f2e4aadd79"),
+                           "Kolibri-1-Q3_K_M.gguf":
+                           (37523996640, "b797de9cebb5f8b6e12e32a57c76776c83c2c077e6804fa4835aa6ab5e9e79da")}},
     "qwen36": {"title": "Qwen3.6-35B-A3B", "by": "Qwen; quantized by Unsloth",
                "about": "on the strata-poly engine: one NVIDIA card, Linux or Windows; a 17 GB file, ~21 GB of RAM "
                         "beside an 8 GB card; a smaller and a larger size too",
@@ -657,13 +690,29 @@ FAMILIES = {
                           "UD-Q4_K_M": {"about": "4- and 5-bit experts (Unsloth Dynamic); the same draft model",
                                         "download_gb": 17.4, "ram_gb": 21, "arena_gb": 14.3,
                                         "vram_beside_gb": 5.3,
-                                        "draft_model": "MTP/mtp-gemma-4-26B-A4B-it-Q8_0.gguf"}},
+                                        "draft_model": "MTP/mtp-gemma-4-26B-A4B-it-Q8_0.gguf"},
+                          # Google's quantization-aware trained checkpoint, quantized by Unsloth; its own repository,
+                          # with a draft model and an image encoder of the same names as the others but not the same
+                          "QAT-UD-Q4_K_XL": {"about": "Google's QAT weights, 4-bit (Unsloth Dynamic), with their own "
+                                                      "draft model",
+                                             "hf": hf("unsloth/gemma-4-26B-A4B-it-qat-GGUF"),
+                                             "file": "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf",
+                                             "mmproj_hf": hf("unsloth/gemma-4-26B-A4B-it-qat-GGUF"),
+                                             "download_gb": 14.7, "ram_gb": 19, "arena_gb": 12.8,
+                                             "vram_beside_gb": 4.1,
+                                             "draft_model": "MTP/mtp-gemma-4-26B-A4B-it-Q8_0.gguf",
+                                             "sha256": {"mtp-gemma-4-26B-A4B-it-Q8_0.gguf":
+                                                        (461785600, "75f58e20c32281d1adc086c0569d53f147e8d81a7b8493cf4a73a028415f67af"),
+                                                        "mmproj-F16.gguf":
+                                                        (1193058784, "d00f211a7d4f7fb19bd9b75d8e9342eccffb5920b08fd9562167560fdfcc5dd1")}}},
                "sha256": {"gemma-4-26B-A4B-it-UD-Q3_K_M.gguf":
                           (12728497888, "811882f6df81c8ea204a5d382f196d6bd601245091786912d4c70df41cdfa052"),
                           "gemma-4-26B-A4B-it-UD-Q2_K_XL.gguf":
                           (10546934240, "2a1d26dfe6ea00a467940a5728316af6edb366bbdba950d65b85d232392fb658"),
                           "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf":
                           (16947541728, "f2c28b3dc4776931ac6f879e11f203dec637ea0f14267a86ec8f6165f63f293f"),
+                          "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf":
+                          (14249047104, "a7c5bc715f5ff8e99a3e8901ce7d2b42b402c669bf24f7c5250747633d0f5891"),
                           "mtp-gemma-4-26B-A4B-it-Q8_0.gguf":
                           (461766816, "6326fb9f5e487aa8dcdd313a091e3c67724cb2a666ec3b7d2895b5b26d93ed1b"),
                           "mmproj-F16.gguf":
@@ -2213,7 +2262,7 @@ def verify_sha256(s: Path, size: int, sha: str, own: bool = False) -> None:
 # general.architecture of each strata-poly family's GGUFs, the name Engine::open() (src/poly/engine.cpp) picks its
 # code by; the families not listed are qwen35moe
 POLY_GGUF_ARCHS = {"glm": ("glm5-next", "glm5next"), "deepseek": ("deepseek4",), "lfm25": ("lfm2moe",),
-                   "gemma4": ("gemma4",), "flint": ("flint",)}
+                   "gemma4": ("gemma4",), "flint": ("flint",), "kolibri": ("kolibri1",)}
 
 
 def gguf_arch(s: Path) -> str:
@@ -6566,7 +6615,7 @@ def poly_setup(a, family, gpu, hip, cuda_tk, multi, ram, data, elsewhere, port, 
         warn(f"{title} on AMD cards on Windows: EXPERIMENTAL.  Setup compiles the HIP engine here (AMD's ROCm "
              "wheels), which has run one model on an RX 9070 XT and nothing else yet; the log says where it stops "
              "if it does")
-    elif hip and family in ("glm", "deepseek", "flint"):   # the engine runs on AMD, these models not yet
+    elif hip and family in ("glm", "deepseek", "flint", "kolibri"):   # the engine runs on AMD, these models not yet
         warn(f"{title} on the AMD card has not been tried: the engine runs there, this model was not")
     if cuda_tk == 12:
         warn(f"{title}'s engine with CUDA 12 is compiled here (the ready-made one is CUDA 13)" +
@@ -6769,20 +6818,22 @@ def poly_setup(a, family, gpu, hip, cuda_tk, multi, ram, data, elsewhere, port, 
                 continue
             download(d.get("hf", fam["hf"]) + s.name, s)
     check_shards(shards)
+    # a size from another repository can ship a draft model or an image encoder of the family's file names
+    sha = {**fam["sha256"], **d.get("sha256", {})}
 
     def _skip_or_verify(path, sha_key):
         """Verify a downloaded file's SHA-256; skip for user-supplied files (header-matched, no pinned hash)."""
         if _sg:                       # header-matched: trust it, the user pointed at this file
             return
-        verify_sha256(path, *fam["sha256"][sha_key], own=bool(a.gguf_dir) and path.parent == models_dir)
+        verify_sha256(path, *sha[sha_key], own=bool(a.gguf_dir) and path.parent == models_dir)
 
     for s in shards:
         if _sg:
             continue                    # user-supplied file: no sha256 to match
         elif a.gguf_dir:
-            verify_poly_own(s, *fam["sha256"][s.name], family)
+            verify_poly_own(s, *sha[s.name], family)
         else:
-            verify_poly_download(s, *fam["sha256"][s.name], family)
+            verify_poly_download(s, *sha[s.name], family)
     if guesser is not None:
         if not have_guesser:
             say("  Its draft model lets it guess a few words ahead and check them at once (faster answers).")
@@ -6790,7 +6841,7 @@ def poly_setup(a, family, gpu, hip, cuda_tk, multi, ram, data, elsewhere, port, 
         _skip_or_verify(guesser, guesser.name)
     if mmproj is not None:
         if not have_mmproj:
-            download(fam["mmproj_hf"] + fam["mmproj"], mmproj, "vision encoder")
+            download(d.get("mmproj_hf", fam["mmproj_hf"]) + fam["mmproj"], mmproj, "vision encoder")
         _skip_or_verify(mmproj, mmproj.name)
         ok(f"vision encoder: {mmproj}")
     ok("model file present")
@@ -6850,6 +6901,10 @@ def poly_setup(a, family, gpu, hip, cuda_tk, multi, ram, data, elsewhere, port, 
            "model_name": base.lower() if base else f"{fam['name']}-{model.lower()}",
            "display_name": base if base else f"{title} {model}",
            "log": str(ROOT / f"strata-{tag.lower()}.log"), "lib_dirs": lib_dirs, "port": port}
+    if fam.get("tool_call_recovery"):
+        cfg["tool_call_recovery"] = True
+        ok("its tool calls are JSON inside the wrapper: they are read with the recovery (tool_call_recovery in the "
+           "config)")
     if multi:                                          # the server passes --layer-split and orders the cards
         cfg["gpu"], cfg["gpus_asked"] = multi, True
         cfg["layer_split"] = a.layer_split or "auto"
@@ -7394,7 +7449,7 @@ def resolve_custom_gguf(path_str: str) -> tuple[str, str, list[Path]]:
         else:  # layout
             matches = [k for k, v in known.items() if v["expert_bytes"] == fp["expert_bytes"]]
         if len(matches) > 1:
-            say(f"Strata: {sentence}")
+            say(f"PolyStrata: {sentence}")
             fail(f"this GGUF's header matches several entries ({', '.join(sorted(matches))})",
                  "use --inspect to read the full explanation, then pick explicitly with --family X --model Y")
         fam_model = matches[0].split("/")
@@ -7414,7 +7469,7 @@ def resolve_custom_gguf(path_str: str) -> tuple[str, str, list[Path]]:
             if fam:
                 break
         if not fam:
-            say(f"Strata: {sentence}")
+            say(f"PolyStrata: {sentence}")
             fail("cannot install this GGUF with --custom-gguf",
                  "use --inspect to read the full explanation, or give it to --gguf-dir")
         # derive the size from the filename's quant token (e.g. "Q4_K_M" in "...-Q4_K_M.gguf")
@@ -7424,12 +7479,12 @@ def resolve_custom_gguf(path_str: str) -> tuple[str, str, list[Path]]:
                       or m.lower().endswith(quant.lower())), None)
         if not model:
             model = sorted(models_dict)[0]
-            warn(f"Strata: {sentence}\n  your file's quant '{quant}' is not one setup offers "
+            warn(f"PolyStrata: {sentence}\n  your file's quant '{quant}' is not one setup offers "
                  f"{', '.join(sorted(models_dict))}: it will run as-is; the RAM and VRAM estimates are for "
                  f"{FAMILIES[fam]['title']}'s --model {model}")
         return fam, model, files
 
-    say(f"Strata: {sentence}")
+    say(f"PolyStrata: {sentence}")
     fail("cannot install this GGUF with --custom-gguf",
          "use --inspect to read the full explanation, or give it to --gguf-dir")
 

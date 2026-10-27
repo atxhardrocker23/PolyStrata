@@ -467,7 +467,8 @@ Windows wheels in `.rocm-win` (the private venv `tools\hip\build_windows.bat` us
 build tools. The Windows path has run one model on one card (Tiel Coder 35B-A3B below); every other one there is
 unreported, so setup warns before it installs a model.
 
-- Install as for NVIDIA: `./setup.sh --family qwen36` (or `lfm25`, `flint`, `ornith`, `gemma4`, `tiel`, `glm`, `deepseek`).
+- Install as for NVIDIA: `./setup.sh --family qwen36` (or `lfm25`, `flint`, `ornith`, `gemma4`, `tiel`, `glm`,
+  `deepseek`, `kolibri`).
   Setup compiles the engine for the card into `engine-poly/` (`build_engine_poly_hip`; on Windows
   `build_engine_poly_hip_win`), with ROCm from a system install or AMD's wheels in `.venv` on Linux and from
   `.rocm-win` on Windows, as for the main engine, and compiles again after a `git pull` that changed the
@@ -493,8 +494,8 @@ unreported, so setup warns before it installs a model.
   | Ornith 1.5 APEX-I-Mini | 40 tokens/s | 444 / 43 tokens/s |
 
   The first tokens after a load come slower while the expert cache fills (the port's own steady-state figures
-  were 64 and 35 tokens/s, with 5,125 and 4,517 experts in VRAM). Gemma 4 and GLM have not been tried on an AMD
-  card, and setup warns so.
+  were 64 and 35 tokens/s, with 5,125 and 4,517 experts in VRAM). GLM 5.3 Flash, DeepSeek V4, Flint and
+  Kolibri 1 have not been tried on an AMD card, and setup warns so.
 - Measured under Windows 11 on an RX 9070 XT (gfx1201, 16 GB; Ryzen 7 7800X3D, 64 GB of RAM), engine 0.1.45
   compiled by setup from AMD's TheRock wheels (ROCm 10.2.0a20260930), Tiel Coder 35B-A3B UD-Q3_K_XL, 32K of
   context, `--kv-whole`, one request at a time: the engine loaded in 8.5 s (15.5 s the first time) with 8,031 of
@@ -899,6 +900,47 @@ at run time (status 11 once while it sets up its workspace is normal) falls back
 after three refusals for good. `hip_prefill_rocblas_gemm` (with `STRATA_ROCBLAS_TUNING` set; skips otherwise) is the
 smoke test: it refuses a table for another architecture or build and checks Gemm's FP16 route against hipBLASEx on the
 table's first two shapes.
+
+## Opt-in split value reduction in strata-poly
+
+`STRATA_HIP_VALUE_SPLIT=1` splits the weighted-value reduction into 1,024-key
+parts, then sums those parts. It applies only to `attend()` with head dimension
+256, eight query heads per KV head, at least 12,288 keys, and no sliding window,
+ring buffer or whole-context attention. Both FP16 and Q8_0 value caches are
+supported. The existing score and softmax kernels still run.
+
+The option reuses the score scratch space after softmax; it allocates no extra
+VRAM. It falls back to the existing reduction if transposed weights or scratch
+space are unavailable. Only the literal value `1` enables it; unset, `0`, and
+other values retain the default path. Set it before starting the engine: a
+captured HIP graph retains the path selected at capture time.
+
+This targets the D256/GQA8 full-attention path used by Qwen3.6-35B-A3B:
+its published configuration has 16 query heads, two KV heads and 10
+full-attention layers among 40. Variants with the same geometry are eligible
+under the runtime gates above; linear-attention layers are unaffected.
+The engine logs availability once the model geometry is known.
+
+On the tested RX 9070 XT configuration, three restarted runs per flag measured
+58.5 -> 59.8 tokens/s at 12K, 48.5 -> 52.3 at 32K and 36.5 -> 44.6 at 98K.
+The 12K ranges overlap; the repeatable gains are +7.8% at 32K and +22.2% at 98K.
+Prompt processing stayed within 3.8%, and peak sampled VRAM was unchanged.
+
+Benchmark representative: Cyber-Tiel-Coder-35B-A3B UD-Q4_K_XL, a community
+`qwen35moe` derivative with this geometry, using Q8_0 KV. These numbers are
+measured on that artifact. End-to-end gains on other compatible variants
+depend on quantization and CPU/GPU expert placement. The separate results
+submission records exact artifacts, hashes, raw runs and reproduction commands.
+
+The enabled reduction changes FP32 addition order, so its output need not be
+bitwise identical to the default. The option targets long-context decode;
+it leaves prefill unchanged.
+
+The project's existing `STRATA_FDEC` path (PR #51) also splits decode
+attention into 1,024-key parts and merges them, but uses CUDA tensor cores and
+keeps the old path on HIP. This new option is a HIP value-reduction kernel; it
+does not replace `STRATA_FDEC` and makes no claim to the general split-key
+algorithm itself.
 
 ## Original backend validation (PR #94)
 
