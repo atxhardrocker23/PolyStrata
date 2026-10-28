@@ -1,4 +1,4 @@
-"""tools/histogram_profile.py - an expert-cache profile from counted routing: which experts a model really used.
+﻿"""tools/histogram_profile.py - an expert-cache profile from counted routing: which experts a model really used.
 
 `make_profile.py` ranks pairs from `--dump-routing` traces of one engine run.  This tool ranks them from a routing
 *histogram* - counts of how often each (layer, expert) was selected, gathered over many real requests - so the
