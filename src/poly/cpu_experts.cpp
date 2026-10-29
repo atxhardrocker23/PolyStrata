@@ -15,6 +15,14 @@
 #include <numeric>
 #include <thread>
 
+#if !defined(STRATA_AVXVNNI)
+#if defined(__AVXVNNI__) || (defined(_MSC_VER) && defined(__AVX2__))
+#define STRATA_AVXVNNI 1
+#else
+#define STRATA_AVXVNNI 0
+#endif
+#endif
+
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -212,19 +220,33 @@ void q4k_gate_up_1(const block_q4_K* gx, const block_q4_K* ux, int nb, const blo
 
             const __m256i gbits = _mm256_loadu_si256((const __m256i*) gq4);
             gq4 += 32;
+#if STRATA_AVXVNNI
+            const __m256i gp16l = _mm256_maddubs_epi16(_mm256_and_si256(gbits, m4), q8l);
+            g_sumi = _mm256_dpwssd_epi32(g_sumi, _mm256_shuffle_epi8(g_scales, shuf_l), gp16l);
+            const __m256i gp16h = _mm256_maddubs_epi16(_mm256_and_si256(_mm256_srli_epi16(gbits, 4), m4), q8h);
+            g_sumi = _mm256_dpwssd_epi32(g_sumi, _mm256_shuffle_epi8(g_scales, shuf_h), gp16h);
+#else
             __m256i gp16l = _mm256_maddubs_epi16(_mm256_and_si256(gbits, m4), q8l);
             gp16l = _mm256_madd_epi16(_mm256_shuffle_epi8(g_scales, shuf_l), gp16l);
             __m256i gp16h = _mm256_maddubs_epi16(_mm256_and_si256(_mm256_srli_epi16(gbits, 4), m4), q8h);
             gp16h = _mm256_madd_epi16(_mm256_shuffle_epi8(g_scales, shuf_h), gp16h);
             g_sumi = _mm256_add_epi32(g_sumi, _mm256_add_epi32(gp16l, gp16h));
+#endif
 
             const __m256i ubits = _mm256_loadu_si256((const __m256i*) uq4);
             uq4 += 32;
+#if STRATA_AVXVNNI
+            const __m256i up16l = _mm256_maddubs_epi16(_mm256_and_si256(ubits, m4), q8l);
+            u_sumi = _mm256_dpwssd_epi32(u_sumi, _mm256_shuffle_epi8(u_scales, shuf_l), up16l);
+            const __m256i up16h = _mm256_maddubs_epi16(_mm256_and_si256(_mm256_srli_epi16(ubits, 4), m4), q8h);
+            u_sumi = _mm256_dpwssd_epi32(u_sumi, _mm256_shuffle_epi8(u_scales, shuf_h), up16h);
+#else
             __m256i up16l = _mm256_maddubs_epi16(_mm256_and_si256(ubits, m4), q8l);
             up16l = _mm256_madd_epi16(_mm256_shuffle_epi8(u_scales, shuf_l), up16l);
             __m256i up16h = _mm256_maddubs_epi16(_mm256_and_si256(_mm256_srli_epi16(ubits, 4), m4), q8h);
             up16h = _mm256_madd_epi16(_mm256_shuffle_epi8(u_scales, shuf_h), up16h);
             u_sumi = _mm256_add_epi32(u_sumi, _mm256_add_epi32(up16l, up16h));
+#endif
         }
         g_acc = _mm256_fmadd_ps(_mm256_set1_ps(yd * half_at(&gx[i], 0)), _mm256_cvtepi32_ps(g_sumi), g_acc);
         u_acc = _mm256_fmadd_ps(_mm256_set1_ps(yd * half_at(&ux[i], 0)), _mm256_cvtepi32_ps(u_sumi), u_acc);
@@ -286,6 +308,14 @@ void q4k_dot_multi(const block_q4_K* x, int nb, const uint8_t* const* act, int n
             for (int j = 0; j < QK_K / 64; ++j) {
                 const __m256i q8l = _mm256_loadu_si256((const __m256i*) q8);
                 q8 += 32;
+#if STRATA_AVXVNNI
+                const __m256i p16l = _mm256_maddubs_epi16(q4l[j], q8l);
+                sumi = _mm256_dpwssd_epi32(sumi, scale_l[j], p16l);
+                const __m256i q8h = _mm256_loadu_si256((const __m256i*) q8);
+                q8 += 32;
+                const __m256i p16h = _mm256_maddubs_epi16(q4h[j], q8h);
+                sumi = _mm256_dpwssd_epi32(sumi, scale_h[j], p16h);
+#else
                 __m256i p16l = _mm256_maddubs_epi16(q4l[j], q8l);
                 p16l = _mm256_madd_epi16(scale_l[j], p16l);
                 const __m256i q8h = _mm256_loadu_si256((const __m256i*) q8);
@@ -293,6 +323,7 @@ void q4k_dot_multi(const block_q4_K* x, int nb, const uint8_t* const* act, int n
                 __m256i p16h = _mm256_maddubs_epi16(q4h[j], q8h);
                 p16h = _mm256_madd_epi16(scale_h[j], p16h);
                 sumi = _mm256_add_epi32(sumi, _mm256_add_epi32(p16l, p16h));
+#endif
             }
             acc[t] = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(sumi), acc[t]);
         }
@@ -365,6 +396,16 @@ void q6k_dot_multi(const block_q6_K* x, int nb, const uint8_t* const* act, int n
                 const __m256i q8_3 = _mm256_loadu_si256((const __m256i*) q8);
                 q8 += 32;
 
+#if STRATA_AVXVNNI
+                const __m256i p16_0 = _mm256_maddubs_epi16(q4_0[j], q8_0);
+                sumi = _mm256_dpwssd_epi32(sumi, sc_0[j], p16_0);
+                const __m256i p16_1 = _mm256_maddubs_epi16(q4_1[j], q8_1);
+                sumi = _mm256_dpwssd_epi32(sumi, sc_1[j], p16_1);
+                const __m256i p16_2 = _mm256_maddubs_epi16(q4_2[j], q8_2);
+                sumi = _mm256_dpwssd_epi32(sumi, sc_2[j], p16_2);
+                const __m256i p16_3 = _mm256_maddubs_epi16(q4_3[j], q8_3);
+                sumi = _mm256_dpwssd_epi32(sumi, sc_3[j], p16_3);
+#else
                 __m256i p16_0 = _mm256_madd_epi16(sc_0[j], _mm256_maddubs_epi16(q4_0[j], q8_0));
                 __m256i p16_1 = _mm256_madd_epi16(sc_1[j], _mm256_maddubs_epi16(q4_1[j], q8_1));
                 __m256i p16_2 = _mm256_madd_epi16(sc_2[j], _mm256_maddubs_epi16(q4_2[j], q8_2));
@@ -372,6 +413,7 @@ void q6k_dot_multi(const block_q6_K* x, int nb, const uint8_t* const* act, int n
 
                 sumi = _mm256_add_epi32(sumi, _mm256_add_epi32(p16_0, p16_1));
                 sumi = _mm256_add_epi32(sumi, _mm256_add_epi32(p16_2, p16_3));
+#endif
             }
             sumi = _mm256_sub_epi32(sumi, q8sclsub);
             acc[t] = _mm256_fmadd_ps(_mm256_broadcast_ss(&d), _mm256_cvtepi32_ps(sumi), acc[t]);
@@ -422,11 +464,18 @@ void q4k_gate_up_2rows(const block_q4_K* gx0, const block_q4_K* ux0, const block
             for (int k = 0; k < 4; ++k) {
                 const __m256i bits = _mm256_loadu_si256((const __m256i*) q4[k]);
                 q4[k] += 32;
+#if STRATA_AVXVNNI
+                const __m256i p16l = _mm256_maddubs_epi16(_mm256_and_si256(bits, m4), q8l);
+                sumi[k] = _mm256_dpwssd_epi32(sumi[k], _mm256_shuffle_epi8(scales[k], shuf_l), p16l);
+                const __m256i p16h = _mm256_maddubs_epi16(_mm256_and_si256(_mm256_srli_epi16(bits, 4), m4), q8h);
+                sumi[k] = _mm256_dpwssd_epi32(sumi[k], _mm256_shuffle_epi8(scales[k], shuf_h), p16h);
+#else
                 __m256i p16l = _mm256_maddubs_epi16(_mm256_and_si256(bits, m4), q8l);
                 p16l = _mm256_madd_epi16(_mm256_shuffle_epi8(scales[k], shuf_l), p16l);
                 __m256i p16h = _mm256_maddubs_epi16(_mm256_and_si256(_mm256_srli_epi16(bits, 4), m4), q8h);
                 p16h = _mm256_madd_epi16(_mm256_shuffle_epi8(scales[k], shuf_h), p16h);
                 sumi[k] = _mm256_add_epi32(sumi[k], _mm256_add_epi32(p16l, p16h));
+#endif
             }
         }
         for (int k = 0; k < 4; ++k) {
@@ -517,6 +566,16 @@ void q6k_down_4rows(const block_q6_K* x0, const block_q6_K* x1, const block_q6_K
                 const __m256i sc_3 = _mm256_cvtepi8_epi16(_mm_shuffle_epi8(scales, get_scale_shuffle_q6(is + 3)));
                 is += 4;
 
+#if STRATA_AVXVNNI
+                const __m256i p16_0 = _mm256_maddubs_epi16(q4_0, q8_0[j]);
+                sumi = _mm256_dpwssd_epi32(sumi, sc_0, p16_0);
+                const __m256i p16_1 = _mm256_maddubs_epi16(q4_1, q8_1[j]);
+                sumi = _mm256_dpwssd_epi32(sumi, sc_1, p16_1);
+                const __m256i p16_2 = _mm256_maddubs_epi16(q4_2, q8_2[j]);
+                sumi = _mm256_dpwssd_epi32(sumi, sc_2, p16_2);
+                const __m256i p16_3 = _mm256_maddubs_epi16(q4_3, q8_3[j]);
+                sumi = _mm256_dpwssd_epi32(sumi, sc_3, p16_3);
+#else
                 __m256i p16_0 = _mm256_madd_epi16(sc_0, _mm256_maddubs_epi16(q4_0, q8_0[j]));
                 __m256i p16_1 = _mm256_madd_epi16(sc_1, _mm256_maddubs_epi16(q4_1, q8_1[j]));
                 __m256i p16_2 = _mm256_madd_epi16(sc_2, _mm256_maddubs_epi16(q4_2, q8_2[j]));
@@ -524,6 +583,7 @@ void q6k_down_4rows(const block_q6_K* x0, const block_q6_K* x1, const block_q6_K
 
                 sumi = _mm256_add_epi32(sumi, _mm256_add_epi32(p16_0, p16_1));
                 sumi = _mm256_add_epi32(sumi, _mm256_add_epi32(p16_2, p16_3));
+#endif
             }
             sumi = _mm256_sub_epi32(sumi, q8sclsub);
             acc[k] = _mm256_fmadd_ps(_mm256_broadcast_ss(&d), _mm256_cvtepi32_ps(sumi), acc[k]);
@@ -591,11 +651,18 @@ void q5k_down_4rows(const block_q5_K* x0, const block_q5_K* x1, const block_q5_K
                 const __m256i q5_1 = _mm256_add_epi8(q5l_1, q5h_1);
                 hmask[k] = _mm256_slli_epi16(hmask[k], 1);
 
+#if STRATA_AVXVNNI
+                const __m256i p16_0 = _mm256_maddubs_epi16(q5_0, q8_0);
+                sumi[k] = _mm256_dpwssd_epi32(sumi[k], _mm256_shuffle_epi8(scales[k], shuf_0), p16_0);
+                const __m256i p16_1 = _mm256_maddubs_epi16(q5_1, q8_1);
+                sumi[k] = _mm256_dpwssd_epi32(sumi[k], _mm256_shuffle_epi8(scales[k], shuf_1), p16_1);
+#else
                 __m256i p16_0 = _mm256_maddubs_epi16(q5_0, q8_0);
                 __m256i p16_1 = _mm256_maddubs_epi16(q5_1, q8_1);
                 p16_0 = _mm256_madd_epi16(_mm256_shuffle_epi8(scales[k], shuf_0), p16_0);
                 p16_1 = _mm256_madd_epi16(_mm256_shuffle_epi8(scales[k], shuf_1), p16_1);
                 sumi[k] = _mm256_add_epi32(sumi[k], _mm256_add_epi32(p16_0, p16_1));
+#endif
             }
         }
         for (int k = 0; k < 4; ++k) {
@@ -667,9 +734,16 @@ void q5k_dot_multi(const block_q5_K* x, int nb, const uint8_t* const* act, int n
                 q8 += 32;
                 const __m256i q8_1 = _mm256_loadu_si256((const __m256i*) q8);
                 q8 += 32;
+#if STRATA_AVXVNNI
+                const __m256i p16_0 = _mm256_maddubs_epi16(q5_0[j], q8_0);
+                sumi = _mm256_dpwssd_epi32(sumi, scale_0[j], p16_0);
+                const __m256i p16_1 = _mm256_maddubs_epi16(q5_1[j], q8_1);
+                sumi = _mm256_dpwssd_epi32(sumi, scale_1[j], p16_1);
+#else
                 __m256i p16_0 = _mm256_madd_epi16(scale_0[j], _mm256_maddubs_epi16(q5_0[j], q8_0));
                 __m256i p16_1 = _mm256_madd_epi16(scale_1[j], _mm256_maddubs_epi16(q5_1[j], q8_1));
                 sumi = _mm256_add_epi32(sumi, _mm256_add_epi32(p16_0, p16_1));
+#endif
             }
             acc[t] = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(sumi), acc[t]);
         }
@@ -1056,14 +1130,57 @@ void cpu_experts(Workers& workers, const CpuExpert* experts, int n, int rows, in
                     td->vec_dot(n_ff, sr + byp[i], 0, down, 0, hqp + (size_t) byp[i] * h_bytes, 0, 1);
             }
         }
-        for (int r = r0; r < r1; ++r) {
-            const float* sr = s + (size_t) (r - r0) * n;
-            // a token's sum in the order its experts were given: the order it has in a call of its own
-            int j = 0;
-            for (int row = 0; row < rows; ++row) {
+        if (rows == 1) {
+            float* out_row = out;
+            int r = r0;
+#if defined(__AVX2__)
+            if ((uintptr_t(out_row + r) % 32) == 0) {
+                for (; r + 7 < r1; r += 8) {
+                    float acc0 = 0.f, acc1 = 0.f, acc2 = 0.f, acc3 = 0.f;
+                    float acc4 = 0.f, acc5 = 0.f, acc6 = 0.f, acc7 = 0.f;
+                    const float* s0 = s + (size_t) (r - r0 + 0) * n;
+                    const float* s1 = s + (size_t) (r - r0 + 1) * n;
+                    const float* s2 = s + (size_t) (r - r0 + 2) * n;
+                    const float* s3 = s + (size_t) (r - r0 + 3) * n;
+                    const float* s4 = s + (size_t) (r - r0 + 4) * n;
+                    const float* s5 = s + (size_t) (r - r0 + 5) * n;
+                    const float* s6 = s + (size_t) (r - r0 + 6) * n;
+                    const float* s7 = s + (size_t) (r - r0 + 7) * n;
+                    for (int j = 0; j < n; ++j) {
+                        const float w = experts[j].weight;
+                        acc0 += w * s0[j];
+                        acc1 += w * s1[j];
+                        acc2 += w * s2[j];
+                        acc3 += w * s3[j];
+                        acc4 += w * s4[j];
+                        acc5 += w * s5[j];
+                        acc6 += w * s6[j];
+                        acc7 += w * s7[j];
+                    }
+                    const __m256 v = _mm256_setr_ps(acc0, acc1, acc2, acc3, acc4, acc5, acc6, acc7);
+                    _mm256_stream_ps(out_row + r, v);
+                }
+            }
+#endif
+            for (; r < r1; ++r) {
+                const float* sr = s + (size_t) (r - r0) * n;
                 float acc = 0.f;
-                for (; j < n && experts[j].row == row; ++j) acc += experts[j].weight * sr[j];
-                out[(size_t) row * n_embd + r] = acc;
+                for (int j = 0; j < n; ++j) acc += experts[j].weight * sr[j];
+                out_row[r] = acc;
+            }
+#if defined(__AVX2__)
+            _mm_sfence();
+#endif
+        } else {
+            for (int r = r0; r < r1; ++r) {
+                const float* sr = s + (size_t) (r - r0) * n;
+                // a token's sum in the order its experts were given: the order it has in a call of its own
+                int j = 0;
+                for (int row = 0; row < rows; ++row) {
+                    float acc = 0.f;
+                    for (; j < n && experts[j].row == row; ++j) acc += experts[j].weight * sr[j];
+                    out[(size_t) row * n_embd + r] = acc;
+                }
             }
         }
     });
