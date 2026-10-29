@@ -1,0 +1,18 @@
+{
+  "gemma-4-26b-a4b-ud-q4_k_m": {
+    "display_name": "Gemma 4 26B-A4B IT (UD-Q4_K_M)",
+    "notes": "Official Google Stock Unedited MoE (128K + MTP, Non-thrashing)"
+  },
+  "cyber-tiel-coder-35b-a3b": {
+    "display_name": "Cyber-Tiel-Coder-35B-A3B (UD-Q4_K_M)",
+    "notes": "Coding specialist MoE (128K context, ~75-85 tok/s)"
+  },
+  "flint-40b-a2.5b-ud-q3_k_xl": {
+    "display_name": "Flint 40B-A2.5B (UD-Q3_K_XL)",
+    "notes": "40B Recursive Coding Agent MoE (128K context, ~65-85 tok/s)"
+  },
+  "gemma-4-26b-a4b-it-abliterated-q6_k": {
+    "display_name": "Gemma 4 26B-A4B IT Abliterated (Q6_K)",
+    "notes": "Google MoE Abliterated / Uncensored (128K context)"
+  }
+}

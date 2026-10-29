@@ -3589,8 +3589,9 @@ class Service:
         # a named model, the loaded one too: a switch away from it that comes first is followed by one back; any other
         # name, or none: the model loaded at the request's turn
         key = config_key(target["config"]) if target is not None else ModelGate.ANY
+        switch_fn = (lambda: self._switch_to(target)) if target is not None else (lambda: None)
         try:
-            with self.gate.use(key, lambda: self._switch_to(target), cancel):
+            with self.gate.use(key, switch_fn, cancel):
                 yield
         except Cancelled:
             raise ClientGone() from None
