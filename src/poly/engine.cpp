@@ -1083,9 +1083,13 @@ std::unique_ptr<Engine> Engine::open(const Options& o) {
     if (name != "gemma4" && (o.kv_format == KvFmt::kInt8 || o.kv_format == KvFmt::kInt8K))
         throw std::runtime_error("--kv int8 and --kv int8k are Gemma 4's; for a qwen35moe or kolibri1 model use "
                                  "--kv q8_0 (this is a '" + name + "' model)");
+    Options opt = o;
     // moe() weighs the picks as a softmax of their scores, which is how only this architecture's router does
-    if (o.cache_bias > 0.f && !qwen35)
-        throw std::runtime_error("--cache-bias is supported for qwen35moe models; this is a '" + name + "' model");
+    if (opt.cache_bias > 0.f && !qwen35) {
+        std::fprintf(stderr, "strata-poly: note: --cache-bias is supported for qwen35moe models; ignored for '%s'\n", name.c_str());
+        opt.cache_bias = 0.f;
+        opt.cache_bias_outer = -1.f;
+    }
     const auto make = [&]() -> std::unique_ptr<Engine> {
         if (name == "glm5-next" || name == "glm5next") return std::make_unique<Glm5Next>();   // Unsloth: no hyphen
         if (qwen35) return std::make_unique<Qwen35>();
@@ -1094,13 +1098,13 @@ std::unique_ptr<Engine> Engine::open(const Options& o) {
         if (name == "lfm2moe") return std::make_unique<Lfm2Moe>();
         if (name == "flint") return std::make_unique<Flint>();
         if (name == "kolibri1") return std::make_unique<Kolibri1>();
-        throw std::runtime_error(o.model + " is a '" + name + "' model, which this engine does not run");
+        throw std::runtime_error(opt.model + " is a '" + name + "' model, which this engine does not run");
     };
     int cards = 1, devices = 1;
-    if (!o.layer_split.empty()) ck(cudaGetDeviceCount(&devices), "cudaGetDeviceCount");
+    if (!opt.layer_split.empty()) ck(cudaGetDeviceCount(&devices), "cudaGetDeviceCount");
     cards = devices;
     // STRATA_POLY_CARDS=N: a split's N parts on the devices there are, in turn, so that a split is tried on one card
-    if (const char* v = std::getenv("STRATA_POLY_CARDS"); v && !o.layer_split.empty()) cards = std::max(1, std::atoi(v));
+    if (const char* v = std::getenv("STRATA_POLY_CARDS"); v && !opt.layer_split.empty()) cards = std::max(1, std::atoi(v));
     std::vector<int> starts;
     if (cards > 1) {
         const MetaValue* blocks = file.get(name + ".block_count");
@@ -1108,12 +1112,12 @@ std::unique_ptr<Engine> Engine::open(const Options& o) {
         if (!blocks) throw std::runtime_error("the GGUF has no " + name + ".block_count");
         int was = 0;
         ck(cudaGetDevice(&was), "cudaGetDevice");
-        starts = layer_starts(o.layer_split, file, (int) blocks->u - (nextn ? (int) nextn->u : 0), cards);
+        starts = layer_starts(opt.layer_split, file, (int) blocks->u - (nextn ? (int) nextn->u : 0), cards);
         ck(cudaSetDevice(was), "cudaSetDevice");
     }
     if (starts.empty()) {
         std::unique_ptr<Engine> engine = make();
-        engine->load(o);
+        engine->load(opt);
         return engine;
     }
 
@@ -1123,7 +1127,7 @@ std::unique_ptr<Engine> Engine::open(const Options& o) {
     for (size_t k = 0; k < starts.size(); ++k) {
         std::unique_ptr<Engine> e = make();
         const bool last = k + 1 == starts.size();
-        Options so = o;
+        Options so = opt;
         if (!last) {
             so.draft = false;
             so.draft_model.clear();
