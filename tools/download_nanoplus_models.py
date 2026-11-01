@@ -15,6 +15,30 @@ MODELS = [
         "url": "https://huggingface.co/IsValorum/Tiel-Coder-35B-A3B-APEX-I-NanoPlus-GGUF/resolve/main/Tiel-Coder-35B-A3B.APEX-I-NanoPlus.gguf",
         "dest": r"G:\Strata-3060\models\tiel-coder-nanoplus\Tiel-Coder-35B-A3B.APEX-I-NanoPlus.gguf",
         "expected_bytes": 12554424672
+    },
+    {
+        "name": "Qwen3.8 Flash Coder APEX-I NanoPlus",
+        "url": "https://huggingface.co/IsValorum/Qwen3.8-Flash-Coder-APEX-I-NanoPlus-GGUF/resolve/main/Qwen3.8-Flash-Coder-85GB.APEX-I-NanoPlus.gguf",
+        "dest": r"G:\Strata-3060\models\qwen-flash-coder-nanoplus\Qwen3.8-Flash-Coder-85GB.APEX-I-NanoPlus.gguf",
+        "expected_bytes": 18336339680
+    },
+    {
+        "name": "LFM2.5 24B-A2B APEX-I NanoPlus",
+        "url": "https://huggingface.co/IsValorum/LFM2.5-24B-A2B-APEX-I-NanoPlus-GGUF/resolve/main/LFM2.5-24B-A2B.APEX-I-NanoPlus.gguf",
+        "dest": r"G:\Strata-3060\models\lfm2.5-nanoplus\LFM2.5-24B-A2B.APEX-I-NanoPlus.gguf",
+        "expected_bytes": 8151662048
+    },
+    {
+        "name": "Ornith 1.5 35B-A3B APEX-I NanoPlus",
+        "url": "https://huggingface.co/IsValorum/Ornith-1.5-35B-A3B-APEX-I-NanoPlus-GGUF/resolve/main/Ornith-1.5-35B-A3B.APEX-I-NanoPlus.gguf",
+        "dest": r"G:\Strata-3060\models\ornith-nanoplus\Ornith-1.5-35B-A3B.APEX-I-NanoPlus.gguf",
+        "expected_bytes": 12554402176
+    },
+    {
+        "name": "Ornith 1.5 Vision Projector (Q8_0)",
+        "url": "https://huggingface.co/IsValorum/Ornith-1.5-35B-A3B-APEX-I-NanoPlus-GGUF/resolve/main/mmproj-Q8_0.gguf",
+        "dest": r"G:\Strata-3060\models\ornith-nanoplus\mmproj-Q8_0.gguf",
+        "expected_bytes": 610655456
     }
 ]
 

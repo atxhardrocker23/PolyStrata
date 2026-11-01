@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 # what an architecture is run by, and what the registry calls it
 BACKENDS = {
+    "qwen4exp": "qwen4exp",
     "glm5-next": "glm5-next", "glm5next": "glm5-next",
     "qwen35moe": "qwen35moe",
     "clover_moe": "clover_moe",
