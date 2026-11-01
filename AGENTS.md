@@ -2,7 +2,12 @@
 
 > **Audience:** Any autonomous AI assistant, agentic coding model (Hermes, Claude, Antigravity, OpenAI/Coder), or script operating inside or querying this repository. Read this file first before executing or modifying scripts.
 
+<<<<<<< HEAD
 ---
+=======
+A second engine, `strata-poly` (`src/poly/`), runs GLM 5.3 Flash, Ornith 1.5 (35B and 122B), DeepSeek V4 Flash and other GGUF models on Linux or Windows: [docs/GLM.md](docs/GLM.md), [docs/ORNITH.md](docs/ORNITH.md), [docs/DEEPSEEK.md](docs/DEEPSEEK.md), [docs/BACKENDS.md](docs/BACKENDS.md). The Qwen engine, the installer, the server and the web app come from
+[Strata](https://github.com/Niko1221/Strata).
+>>>>>>> upstream/main
 
 ## 1. System Hardware & Topology
 
