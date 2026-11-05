@@ -22,5 +22,9 @@
   "ornith-nanoplus": {
     "display_name": "Ornith 1.5 35B-A3B APEX-I NanoPlus",
     "notes": "Agentic Coding & Reasoning MoE (Vision Enabled, 100% in 12GB VRAM, Zero CPU Swaps)"
+  },
+  "huihui-qwen38-27b-nanoplus": {
+    "display_name": "Huihui-Qwen3.8-27B Abliterated VAL-APEX-I NanoPlus V3",
+    "notes": "Uncensored 27B Dense Hybrid Reasoning (Linear GDN + MTP, 100% in 12GB VRAM, Zero Swaps)"
   }
 }
