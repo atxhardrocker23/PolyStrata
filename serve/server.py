@@ -883,7 +883,7 @@ class StrataEngine:
             pin["preexec_fn"] = lambda: os.sched_setaffinity(0, cpus)
         spawned_at = time.monotonic()
         self.proc = popen("the PolyStrata engine", [exe, "--serve", *args], cwd=cwd, stdin=subprocess.PIPE,
-                          stdout=subprocess.PIPE, stderr=self.log, text=True, encoding="utf-8", bufsize=65536, env=env, **pin)
+                          stdout=subprocess.PIPE, stderr=self.log, text=True, encoding="utf-8", bufsize=1, env=env, **pin)
         contain(self.proc)                               # ends with the server, however it ends (Windows)
         if os.name == "nt" and self.proc and self.proc.pid:
             try:
@@ -3539,7 +3539,7 @@ class Service:
                     old.unload()
             # On Windows, the NVIDIA driver/WDDM releases GPU page tables and VRAM asynchronously.
             # Wait for VRAM to return to the card before spawning the next model to avoid cudaErrorMemoryAllocation.
-            if os.name == "nt":
+            if os.name == "nt" and isinstance(old_engine, StrataEngine):
                 t_w = time.monotonic()
                 while time.monotonic() - t_w < 5.0:
                     fv = self.free_vram_mib()

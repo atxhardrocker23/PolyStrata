@@ -428,8 +428,10 @@ class OnRequest(unittest.TestCase):
         """Without the key: the same /v1/models bytes as 0.1.44.1-poly.6, any name answered by the loaded model."""
         loaded = {"object": "list", "data": [
             {"id": "alpha", "object": "model", "status": {"value": "loaded"}, "meta": {"n_ctx": 4096},
+             "reasoning": {"efforts": ["off", "low", "medium", "high"]},
              "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]}, "aliases": ["a1"]},
             {"id": "a1", "object": "model", "status": {"value": "loaded"}, "meta": {"n_ctx": 4096},
+             "reasoning": {"efforts": ["off", "low", "medium", "high"]},
              "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]}, "aliases": ["a1"],
              "alias_of": "alpha"}]}
         self.assertEqual(self.call("/v1/models"), (200, loaded))

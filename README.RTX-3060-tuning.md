@@ -17,8 +17,8 @@ This repository contains custom performance-engineered branches and compiled bin
 
 ## 🛠️ Performance Architecture & Optimizations Integrated
 
-1. **Hardware-Native AVX-VNNI `VPDPBUSD` Vector Dot Product (`quants.c`, `CMakeLists.txt`)**:
-   - Enables `-DGGML_AVX_VNNI=ON` and implements 256-bit VEX-encoded `vex vpdpbusd` for CPU integer dot products (`IQ3_S`, `IQ4_NL`, `IQ4_XS`, `MXFP4`) with full sign extraction (`_mm256_sign_epi8`).
+1. **Hardware-Native AVX-VNNI `VPDPBUSD` & `VPDPWSSD` Vector Dot Products (`quants.c`, `CMakeLists.txt`)**:
+   - Enables `-DGGML_AVX_VNNI=ON` and implements 256-bit VEX-encoded `vex vpdpbusd` (`_mm256_dpbusd_epi32`) and `vex vpdpwssd` (`_mm256_dpwssd_epi32`) for CPU integer dot products (`IQ3_S`, `IQ4_NL`, `IQ4_XS`, `MXFP4`, `Q8_K`) with full sign extraction (`_mm256_sign_epi8`).
    - Cuts CPU integer matrix instructions by ~3–4× on Golden Cove P-cores.
 2. **Layer-Graded MoE Cache Biasing (`--cache-bias 0.42`, `--cache-bias-outer 0.15`)**:
    - Router logit bonus gives middle feature-extraction layers strong affinity to VRAM-resident experts (`+0.420`), while tapering early input and deep output layers to `+0.150` to safeguard semantic quality and protect deep representations.
@@ -31,8 +31,8 @@ This repository contains custom performance-engineered branches and compiled bin
    - Uses `_mm_stream_si128` + `_mm_sfence()` when staging CPU experts into pinned RAM. Bypasses the CPU cache hierarchy, keeping the Intel L3 cache clean for execution threads.
 6. **Zero-Copy File-View Expert Pinning (Custom WDDM Page-Merge Fix)**:
    - Registers memory-mapped GGUF file views directly with CUDA (`cudaHostRegister`), eliminating redundant copies. Includes a custom fix merging adjacent 32-byte-aligned tensor intervals on 4096-byte boundaries and a 2048 MiB Windows WDDM aperture safety cap.
-7. **Per-Model Thinking Effort & Anti-Starvation Switching**:
-   - Exposes dynamic reasoning effort levels (`off`, `low`, `medium`, `high`) in OpenAI/Anthropic APIs and drains queued requests cleanly before triggering model transitions.
+7. **Per-Model Thinking Effort, Middle Truncation & Anti-Starvation Switching**:
+   - Exposes dynamic reasoning effort levels (`off`, `low`, `medium`, `high`) in OpenAI/Anthropic APIs, opt-in middle prompt truncation (`"truncate_middle": true`) to preserve system prompts and latest user turns on context overflow, and non-starvation model switching.
 
 ---
 
