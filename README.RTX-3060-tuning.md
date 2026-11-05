@@ -6,12 +6,15 @@ This repository contains custom performance-engineered branches and compiled bin
 
 ## 🚀 Benchmark Highlights (RTX 3060 12GB Unlocked + i5-12400 + 32GB RAM)
 
-| Model | Quantization | Context Window | Prefill Speed | Sustained Decode | VRAM Cache Hit Rate |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Flint 40B-A2.5B** | `UD-Q3_K_XL` (18.5 GB) | **128,000 (131072)** | **1,200+ tok/s** | **60–85+ tok/s** | **84.4%** (6,208 / 12,032 in VRAM) |
-| **Cyber-Tiel-Coder 35B-A3B** | `UD-Q4_K_M` (22.3 GB) | **128,000 (131072)** | **900–1,100 tok/s** | **45–65+ tok/s** | **80.8%** (4,141 / 10,240 in VRAM) |
-| **Qwen 3.6 35B-A3B Heretic** | `i1-Q6_K` (25.1 GB) | **128,000 (131072)** | **850–1,050 tok/s** | **40–55+ tok/s** | **63.6%** (3,170 / 10,240 in VRAM) |
-| **Gemma 4 26B-A4B IT Abliterated** | `Q6_K` (21.4 GB) | **128,000 (131072)** | **950–1,150 tok/s** | **45–60+ tok/s** | **97.8%** (1,528 / 3,840 in VRAM) |
+All models deployed are **APEX-I NanoPlus** quants engineered to fit 83%–100% of routed experts inside the 12GB VRAM budget, with remaining layers pinned in physical RAM:
+
+| Model | Quantization | Size | Context Window | Prefill Speed | Sustained Decode | VRAM Expert Residency |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Gemma 4 26B-A4B IT Abliterated** | `i1-IQ3_S` | **11.38 GB** | **128,000 (131072)** | **1,100+ tok/s** | **55–75+ tok/s** | **83.4%** (3,202 / 3,840 in VRAM, 5 layers pinned in RAM) |
+| **Tiel-Coder 35B-A3B** | `APEX-I NanoPlus` | **11.69 GB** | **128,000 (131072)** | **1,000–1,200 tok/s** | **65–85+ tok/s** | **88.0%** (zero unpinned CPU swapping) |
+| **Flint 40B-A2.5B (V2.1)** | `APEX-I NanoPlus` | **12.33 GB** | **128,000 (131072)** | **1,200+ tok/s** | **70–90+ tok/s** | **85.0%** (recursive agent MoE) |
+| **Ornith 1.5 35B-A3B** | `APEX-I NanoPlus` | **11.69 GB** | **128,000 (131072)** | **950–1,150 tok/s** | **50–70+ tok/s** | **88.0%** (vision enabled) |
+| **LFM 2.5 24B-A2B** | `APEX-I NanoPlus` | **7.59 GB** | **128,000 (131072)** | **1,400+ tok/s** | **90–120+ tok/s** | **100%** (100% VRAM-resident hybrid MoE) |
 
 ---
 
@@ -29,7 +32,7 @@ This repository contains custom performance-engineered branches and compiled bin
    - Custom CUDA kernel (`native_mmvq_slots_warp_kernel`) replaces 8-slot limit with 32 slots (`kMmvqSlotsMax = 32`). Cuts kernel dispatch overhead by $4\times$.
 5. **Non-Temporal Streaming CPU Stores (`STRATA_POLY_STREAM_STAGE=1`)**:
    - Uses `_mm_stream_si128` + `_mm_sfence()` when staging CPU experts into pinned RAM. Bypasses the CPU cache hierarchy, keeping the Intel L3 cache clean for execution threads.
-6. **Zero-Copy File-View Expert Pinning (Custom WDDM Page-Merge Fix)**:
+6. **Zero-Copy File-View Expert Pinning (`STRATA_POLY_PIN_EXPERTS=2048`)**:
    - Registers memory-mapped GGUF file views directly with CUDA (`cudaHostRegister`), eliminating redundant copies. Includes a custom fix merging adjacent 32-byte-aligned tensor intervals on 4096-byte boundaries and a 2048 MiB Windows WDDM aperture safety cap.
 7. **Per-Model Thinking Effort, Middle Truncation & Anti-Starvation Switching**:
    - Exposes dynamic reasoning effort levels (`off`, `low`, `medium`, `high`) in OpenAI/Anthropic APIs, opt-in middle prompt truncation (`"truncate_middle": true`) to preserve system prompts and latest user turns on context overflow, and non-starvation model switching.
@@ -59,10 +62,9 @@ This repository contains custom performance-engineered branches and compiled bin
 
 ### Direct Launch
 Run any of the pre-configured batch launchers:
-- `run-flint-ud-q3_k_xl.bat` (Flint 40B-A2.5B, 128k context)
-- `run-cybertiel-q4_k_m.bat` (Cyber-Tiel-Coder 35B-A3B, 128k context)
-- `run-qwen36abl-q4_k_m.bat` (Qwen 3.6 35B-A3B Heretic, 128k context)
-- `run-gemma4-q6_k.bat` (Gemma 4 26B-A4B Abliterated, 128k context)
+- `G:\Start PolyStrata.bat` (interactive model selector on port 8088)
+- `G:\Start Flint 40B NanoPlus.bat`
+- `G:\Start Tiel Coder NanoPlus.bat`
 
 All launchers expose an OpenAI-compatible API at:
-`http://127.0.0.1:8080/v1/chat/completions`
+`http://127.0.0.1:8088/v1/chat/completions` (or `http://127.0.0.1:8080/v1/chat/completions` under standalone Python server)

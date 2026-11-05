@@ -72,10 +72,26 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
 });
 
 let tab = "chat";
+const TABS = ["chat", "images", "monitor", "requests", "about"];
 function showTab(name) {
-  tab = ["chat", "images", "monitor", "about"].includes(name) ? name : "chat";
+  tab = TABS.includes(name) ? name : "chat";
   for (const b of document.querySelectorAll(".st-tab")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
-  for (const v of ["chat", "images", "monitor", "about"]) $(`view-${v}`).hidden = v !== tab;
+  for (const v of TABS) $(`view-${v}`).hidden = v !== tab;
+  if (tab === "images") $("img-prompt").focus();
+  if (location.hash.slice(1) !== tab) history.replaceState(null, "", tab === "chat" ? location.pathname : `#${tab}`);
+  if (tab === "chat") $("input").focus();
+  if (tab === "monitor") loadMcp();
+  if (tab === "about") loadConfig();
+  if (tab === "requests") showRequests();
+  if (lastMetrics) render(lastMetrics);
+}
+// #142: the Requests tab shows the /api-monitor page, loaded the first time the tab opens, or how to turn it on.
+function showRequests() {
+  const on = (health.api_monitor !== undefined) ? health.api_monitor : true, frame = $("requests-frame");
+  $("requests-off").hidden = on !== false;
+  frame.hidden = on !== true;
+  if (on && !frame.getAttribute("src")) frame.src = "api-monitor";
+}
   if (tab === "images") $("img-prompt").focus();
   if (location.hash.slice(1) !== tab) history.replaceState(null, "", tab === "chat" ? location.pathname : `#${tab}`);
   if (tab === "chat") $("input").focus();

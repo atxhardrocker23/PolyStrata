@@ -2,21 +2,18 @@
 
 > **Audience:** Any autonomous AI assistant, agentic coding model (Hermes, Claude, Antigravity, OpenAI/Coder), or script operating inside or querying this repository. Read this file first before executing or modifying scripts.
 
-<<<<<<< HEAD
+A second engine, `strata-poly` (`src/poly/`), runs GGUF models on Linux or Windows with custom MoE routing and hardware optimizations: [docs/GLM.md](docs/GLM.md), [docs/ORNITH.md](docs/ORNITH.md), [docs/DEEPSEEK.md](docs/DEEPSEEK.md), [docs/BACKENDS.md](docs/BACKENDS.md). The server frontend, model router, and web workspace are powered by `am2strata` (`G:\Strata-3060\am2strata\am2strata.exe`) on port 8088.
+
 ---
-=======
-A second engine, `strata-poly` (`src/poly/`), runs GLM 5.3 Flash, Ornith 1.5 (35B and 122B), DeepSeek V4 Flash and other GGUF models on Linux or Windows: [docs/GLM.md](docs/GLM.md), [docs/ORNITH.md](docs/ORNITH.md), [docs/DEEPSEEK.md](docs/DEEPSEEK.md), [docs/BACKENDS.md](docs/BACKENDS.md). The Qwen engine, the installer, the server and the web app come from
-[Strata](https://github.com/Niko1221/Strata).
->>>>>>> upstream/main
 
 ## 1. System Hardware & Topology
 
 When planning batch sizes, context limits, thread counts, and memory allocations, assume these exact specifications:
-- **GPU:** NVIDIA GeForce RTX 3060 12GB VRAM (Compute Capability `sm_86`, unlocked power limit, CUDA Toolkit v13.0).
-- **CPU:** Intel Core i5-12400 (6 Physical Performance Cores, 12 Threads). Never allocate more than 6 worker threads to avoid hyperthread scheduling penalties.
+- **GPU:** NVIDIA GeForce RTX 3060 12GB VRAM (Compute Capability `sm_86`, unlocked power limit, CUDA Toolkit v13.0, driver 621.14, Resizable BAR 16GB active).
+- **CPU:** Intel Core i5-12400 (6 Physical Performance Cores, 12 Threads). Never allocate more than 6 worker threads (`OMP_NUM_THREADS=6`) to avoid hyperthread AVX2 execution contention.
 - **RAM:** 32 GB DDR4.
-- **OS:** Windows 11 64-bit with `SeLockMemoryPrivilege` (Large Pages) enabled.
-- **Root Directory:** `G:\PolyStrata` (with NTFS mirror junction at `G:\Strata-3060`).
+- **OS:** Windows 11 64-bit with `SeLockMemoryPrivilege` (Large Pages) enabled and `TdrDelay=60`.
+- **Root Directory:** `G:\PolyStrata` (with NTFS mirror junctions at `G:\Strata-3060`: `.venv`, `models`, `packs`, `serve`, `tools`, and `engine-poly`).
 
 ---
 
@@ -24,23 +21,27 @@ When planning batch sizes, context limits, thread counts, and memory allocations
 
 ```
 G:\PolyStrata (and G:\Strata-3060)
-├── engine-poly/
-│   ├── strata-poly.exe       # Custom compiled C++/CUDA release binary (sm_86 + AVX2 + LTCG)
+├── engine-poly/              # NTFS junction to PolyStrata\engine-poly
+│   ├── strata-poly.exe       # Custom compiled C++/CUDA release binary (sm_86 + AVX2/AVX-VNNI + LTCG)
+│   ├── strata-vision.exe     # Multimodal vision encoder binary
 │   └── BUILD.json            # Version and source hash fingerprint (do not overwrite)
-├── models/                   # GGUF model weights storage
-│   ├── flint-UD-Q3_K_XL/
-│   ├── cyber-tiel-coder-35b-a3b/
-│   ├── qwen36abl-Q4_K_M/
-│   └── gemma4-26b-a4b-it-abliterated/
+├── models/                   # GGUF model weights storage (NanoPlus models)
+│   ├── gemma4-nanoplus/      # Gemma 4 26B-A4B IT Abliterated (i1-IQ3_S, 11.38 GB)
+│   ├── tiel-coder-nanoplus/  # Tiel-Coder-35B-A3B APEX-I NanoPlus (11.69 GB)
+│   ├── flint-apex-nanoplus/  # Flint 40B-A2.5B APEX-I NanoPlus V2.1 (12.33 GB)
+│   ├── ornith-nanoplus/      # Ornith 1.5 35B-A3B APEX-I NanoPlus (11.69 GB)
+│   └── lfm2.5-nanoplus/      # LFM 2.5 24B-A2B APEX-I NanoPlus (7.59 GB)
 ├── packs/                    # Model tokenizers and expert-profile.txt activation frequency caches
-├── serve/
-│   ├── server.py             # FastAPI/HTTP server (port 8080) with OpenAI/Anthropic endpoints
+├── serve/                    # Python engine harness & test suites
+│   ├── server.py             # Server harness & engine process management
 │   ├── frontend.py           # Jinja chat templating and thinking effort injection
 │   ├── model_gate.py         # Multi-model queue and zero-downtime switching gate
 │   └── models.py             # Model discovery and capabilities registry
-├── src/poly/                 # C++ engine core (MoE dispatch, routing, CPU AVX2 kernels)
-├── strata-*.json             # Declarative run configurations for each model
-└── run-*.bat                 # Windows shell launchers with locked environment variables
+├── am2strata/                # G:\Strata-3060\am2strata: High-performance Rust web UI & server
+│   ├── am2strata.exe         # Native Windows server binary (port 8088)
+│   ├── configs/              # Active model configs (strata-*.json)
+│   └── web/                  # Web workspace assets
+└── strata-*.json             # Declarative run configurations for each model
 ```
 
 ---
@@ -56,8 +57,10 @@ set "STRATA_FATTN=1"               :: FlashAttention kernel for prompt prefill
 set "STRATA_FDEC=1"                :: Tensor-core decode attention kernel
 set "STRATA_SLOTS_WARP=1"          :: 32-slot warp-per-row-group MoE batch launch (PR #94)
 set "STRATA_POLY_STREAM_STAGE=1"   :: Non-temporal streaming CPU stores for staging (PR #99)
-set "STRATA_POLY_PIN_EXPERTS=0" :: Zero-copy pinned GGUF layer views (PR #35 + WDDM fix)
-set "STRATA_CACHE_BIAS=0.35"       :: Cache-aware VRAM top-k expert routing bonus (Issue #81)
+set "STRATA_POLY_PIN_EXPERTS=2048" :: Pin out-of-VRAM expert layers into locked physical RAM (WDDM page-merge fix)
+set "STRATA_CACHE_BIAS=0.42"       :: Cache-aware VRAM top-k expert routing bonus
+set "STRATA_CACHE_BIAS_OUTER=0.15" :: Tapered routing bonus for boundary layers
+set "STRATA_CPU_SPIN=200000"       :: Active CPU worker pause-spin loop preventing sleep context switches
 set "OMP_NUM_THREADS=6"            :: Lock CPU workers to 6 physical P-cores
 set "OMP_PROC_BIND=TRUE"
 set "OMP_PLACES=cores"
@@ -68,13 +71,14 @@ set "OMP_PLACES=cores"
 ## 4. Model Registry & Execution Constraints
 
 ### Strict Constraints:
-1. **Context Window:** The user requires a **128K (`131072`) context window** on all models. Never reduce `--max-context` below `131072` unless explicitly ordered by the user for an isolated test.
-2. **Port & Endpoint:** The server listens on `http://127.0.0.1:8080/v1`.
+1. **Context Window:** The user requires a full context window (up to `131072`) on all models.
+2. **Active Server Port & Endpoint:** The active model server runs via `am2strata.exe` at `http://127.0.0.1:8088/v1` (or standalone `serve/server.py` at `http://127.0.0.1:8080/v1`).
 3. **Available Models:**
-   - `flint-40b-a2.5b-ud-q3_k_xl`: Thinking effort levels `['low', 'medium', 'high']` (Flint always thinks; no `off`).
-   - `cyber-tiel-coder-35b-a3b`: Thinking effort levels `['off', 'low', 'medium', 'high']`.
-   - `qwen3.6-35b-a3b-abliterated-q4_k_m`: Thinking effort levels `['off', 'low', 'medium', 'high']`.
-   - `gemma-4-26b-a4b-it-abliterated-q6_k`: Thinking effort levels `['off', 'low', 'medium', 'high']`.
+   - `gemma-4-26b-a4b-it-abliterated-nanoplus`: Vision enabled, uncensored MoE.
+   - `tiel-coder-35b-apex-nanoplus`: Vision enabled, coding MoE.
+   - `flint-40b-apex-nanoplus`: Recursive coding agent MoE.
+   - `ornith-nanoplus`: Vision enabled, agentic reasoning MoE.
+   - `lfm2.5-24b-nanoplus`: Liquid hybrid MoE (100% in 12GB VRAM).
 
 ---
 
@@ -82,15 +86,15 @@ set "OMP_PLACES=cores"
 
 - `POST /v1/chat/completions`: Standard OpenAI chat API. Supports streaming (`"stream": true`), thinking tags (`<think>...</think>`), and reasoning effort (`"reasoning_effort": "low"|"medium"|"high"`).
 - `GET /v1/models`: Discovers available models, active loaded status, and thinking effort capabilities.
-- `GET /props`: Engine runtime facts (VRAM free, cache hit rates, active context).
-- `GET /slots`: Real-time batch slot monitoring.
+- `GET /health`: Health and hardware status.
+- `POST /api/models/load`: Hot-swap active model in VRAM without server restart.
 
 ---
 
 ## 6. How to Recompile the Engine (if modifying C++/CUDA code)
 
-To recompile `strata-poly.exe` with all hardware optimizations enabled:
+To recompile `strata-poly.exe` with all hardware optimizations enabled for RTX 3060 (`sm_86`):
 ```cmd
-G:\PolyStrata\build-strata-poly.bat
+G:\PolyStrata\build-poly.bat
 ```
-After building, stamp `BUILD.json` with `setup.source_hash(setup.ENGINE_SOURCES)` so `setup.py` does not attempt to overwrite your binary.
+After building, the binary is compiled to `build-poly\strata-poly.exe` and copied to `engine-poly\strata-poly.exe`.
