@@ -5209,8 +5209,22 @@ int main(int argc, char** argv) {
     // In particular WDDM can refuse the draft weights after mapping tens of GiB of host pages.
     strata::core::MtpDrafter mtp;
     // the draft layer's geometry (the canonical model's MTP head), `static` because MtpDrafter keeps a reference; the batch
-    // slots' draft-KV copies use this one too
-    static const strata::core::ModelGeometry draft_geometry{};
+    // slots' draft-KV copies use this one too.  A head with fewer routed experts than the canonical 512 (Groot-65B-A6B's
+    // own MTP: 256, tools/mtp_rt_gguf.py) is told by its experts.bin, one blob per expert; a 512-expert file (the canonical
+    // head, also what a pruned target such as GSQ-RCO Coder drafts with) keeps the canonical geometry unchanged.
+    static const strata::core::ModelGeometry draft_geometry = [&] {
+        strata::core::ModelGeometry g{};
+        if (o.mtp.empty()) return g;
+        std::error_code ec;
+        const uint64_t bytes = (uint64_t) std::filesystem::file_size(std::filesystem::path(o.mtp) / "experts.bin", ec);
+        const uint64_t blob = strata::kernels::cpu::BLOB;
+        if (!ec && bytes > 0 && bytes % blob == 0 && bytes / blob != (uint64_t) g.n_expert) {
+            g.n_expert = (int64_t) (bytes / blob);
+            std::fprintf(stderr, "strata generate: the MTP draft layer has %lld routed experts (%s/experts.bin)\n",
+                         (long long) g.n_expert, o.mtp.c_str());
+        }
+        return g;
+    }();
     std::vector<std::unique_ptr<strata::core::MtpDrafter>> slot_mtp;
     if (!o.mtp.empty()) {
         if (o.spec < 2) {
