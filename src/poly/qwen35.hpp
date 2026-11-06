@@ -70,6 +70,12 @@ private:
         uint16_t* k_scales = nullptr;
         int8_t*   v_codes  = nullptr;
         uint16_t* v_scales = nullptr;
+        // turbo cache (--kv turbo, fattn.hpp's Kvtq): per token and kv head 128 bytes of key nibbles, 96 of value
+        // bits and two float norms each
+        uint8_t* k_tq = nullptr;
+        float*   k_tn = nullptr;
+        uint8_t* v_tq = nullptr;
+        float*   v_tn = nullptr;
         Dev sh_gate_inp;   ///< the shared expert's gate
     };
 
@@ -99,6 +105,7 @@ private:
     int n_gdn_ = 0, n_attn_ = 0;
     GdnMmaControl gdn_mma_;           ///< captured request and per-engine capability (STRATA_GDN_MMA=1)
     int chunk_ = 1;   ///< tokens the attention takes at a time
+    size_t score_floats_ = 0;   ///< the floats of score_ (assign_scratch())
 
     // device scratch
     float *proj_ = nullptr, *qkv_ = nullptr, *z_ = nullptr, *alpha_ = nullptr, *beta_ = nullptr, *gated_ = nullptr;

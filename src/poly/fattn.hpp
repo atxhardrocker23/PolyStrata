@@ -44,6 +44,35 @@ bool fdec_fits(int dim, int n_head, int kv_heads, int rows, size_t scratch_float
 bool fdec_q8(const float* q, Kvq8 kq8, Kvq8 vq8, int64_t pos, int n, const long long* at, int room, float* out,
              int dim, int n_head, int kv_heads, float scale, float* scratch, size_t scratch_floats, void* stream);
 
+/// A TurboQuant cache (--kv turbo): each head's row of 256 values is two halves of 128, each normalized, turned
+/// by a random-sign Walsh-Hadamard transform and replaced value by value by the nearest of 16 (keys) or 8 (values)
+/// Lloyd-Max centroids for N(0, 1/128), with the half's norm kept (corrected so the half keeps its length), as moex's
+/// MOEX_KV=turbo.  Per token and kv head: keys 128 bytes of nibbles (byte i: values 2i, 2i + 1) and 2 float norms,
+/// values 96 bytes (2 low bits of value d in byte d / 4, its high bit in byte 64 + d / 8) and 2 float norms.  The
+/// cache holds the rotated vectors: the queries are turned the same way before the attention (the scores are the
+/// same) and its output turned back after it (turbo_rotate()).
+struct Kvtq {
+    const uint8_t* codes = nullptr;
+    const float* norms = nullptr;
+};
+constexpr int kTurboKeyBytes = 128, kTurboValBytes = 96;   // a token's row for one kv head, without the norms
+
+/// The rows of n tokens (kv_heads * 256 floats a token, keys k and values v) from position pos, or from the one the
+/// card holds at `at` when the launch runs, into a TurboQuant cache.
+void turbo_store(const float* k, const float* v, uint8_t* kq, float* kn, uint8_t* vq, float* vn, int kv_heads,
+                 int64_t pos, int n, const long long* at, void* stream);
+
+/// The rotation of turbo_store() (inverse: its inverse) on `vectors` vectors of 256 floats, in place.
+void turbo_rotate(float* x, int vectors, bool inverse, void* stream);
+
+/// fattn_q8() over a TurboQuant cache; q rotated (turbo_rotate()), out rotated too.
+bool fattn_tq(const float* q, Kvtq k, Kvtq v, int64_t pos, int n, float* out, int dim, int n_head, int kv_heads,
+              float scale, float* scratch, size_t scratch_floats, void* stream);
+
+/// fdec_q8() over a TurboQuant cache; q rotated, out rotated too.
+bool fdec_tq(const float* q, Kvtq k, Kvtq v, int64_t pos, int n, const long long* at, int room, float* out, int dim,
+             int n_head, int kv_heads, float scale, float* scratch, size_t scratch_floats, void* stream);
+
 /// fdec_q8() over an fp16 cache (keys and vals, kv_heads * dim halves a row), read where it lies.
 bool fdec_f16(const float* q, const uint16_t* keys, const uint16_t* vals, int64_t pos, int n, const long long* at,
               int room, float* out, int dim, int n_head, int kv_heads, float scale, float* scratch,

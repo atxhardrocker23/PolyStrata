@@ -101,6 +101,8 @@ void Qwen35::load_geometry() {
         sections_ = covered;
     }
     theta_scale_ = std::pow(shape_f("rope.freq_base"), -2.f / (float) n_rot_);
+    if (opt_.kv_format == KvFmt::kTurbo && (head_dim_ != 256 || clover_))
+        throw std::runtime_error("--kv turbo needs heads of 256 values and no block of guesses (Qwen3.5 / 3.6)");
 
     // this architecture puts no limit on a SwiGLU's inputs
     clamp_exp_.assign((size_t) n_layer_ + 1, INFINITY);
@@ -163,6 +165,10 @@ void Qwen35::alloc_caches() {
         const size_t row_bytes = (size_t) n_kv_ * head_dim_ + (size_t) n_kv_ * (head_dim_ / 32) * sizeof(uint16_t);
         std::fprintf(stderr, "strata-poly: q8_0 KV cache: %zu bytes a row\n", row_bytes);
     }
+    if (opt_.kv_format == KvFmt::kTurbo && !axes_)
+        std::fprintf(stderr, "strata-poly: turbo KV cache (K 4-bit, V 3-bit): %zu bytes a token for its %d attention "
+                             "layers (fp16: %zu); the rest stays with the expert cache\n",
+                     card_row_bytes(), n_attn_, (size_t) n_attn_ * 2 * n_kv_ * head_dim_ * sizeof(uint16_t));
     const size_t past_n = size_t(3) * conv_dim_, s_n = size_t(v_heads_) * s_dim_ * s_dim_;
     const size_t row = (size_t) n_kv_ * head_dim_ * sizeof(uint16_t);
     float* st = state_;
@@ -174,6 +180,11 @@ void Qwen35::alloc_caches() {
             st += past_n;
             B.s = st;
             st += s_n;
+        } else if (opt_.kv_format == KvFmt::kTurbo) {
+            B.k_tq = (uint8_t*) kv_alloc((size_t) n_kv_ * kTurboKeyBytes, 1);
+            B.k_tn = (float*) kv_alloc((size_t) n_kv_ * 2 * sizeof(float), 1);
+            B.v_tq = (uint8_t*) kv_alloc((size_t) n_kv_ * kTurboValBytes, 1);
+            B.v_tn = (float*) kv_alloc((size_t) n_kv_ * 2 * sizeof(float), 1);
         } else if (opt_.kv_format == KvFmt::kQ8_0) {
             const size_t codes_row = (size_t) n_kv_ * head_dim_;                            // int8
             const size_t scales_row = (size_t) n_kv_ * (head_dim_ / 32) * sizeof(uint16_t);  // fp16
@@ -189,6 +200,11 @@ void Qwen35::alloc_caches() {
     // a block of guesses attends in one launch (attn_block_pass())
     const size_t fewest = mask_ >= 0 ? std::min(opt_.window, rows_) : 1;
     chunk_ = (int) std::clamp<size_t>(kScoreFloats / ((size_t) n_head_ * opt_.max_context), fewest, (size_t) rows_);
+    // the scores' scratch, which fattn also takes for a prompt batch's partial results and its K/V block: a batch of
+    // 4,096 needs a little more than kScoreFloats (16 Mi floats = 4,096 * 16 heads * 256), so it is sized up for one
+    // (--kv turbo has no other prompt path)
+    score_floats_ = std::max((size_t) chunk_ * n_head_ * opt_.max_context,
+                             (size_t) rows_ * n_head_ * (head_dim_ + 4) + (size_t) (rows_ + 512) * n_kv_ * head_dim_ + 4096);
     if (axes_) return;   // bind(): a call's scratch is every sequence's
     axes_ = (int32_t*) dmalloc((size_t) rows_ * 3 * sizeof(int32_t), "a call's rotary positions");
     h_axes_.resize((size_t) rows_ * 3);
@@ -210,7 +226,7 @@ void Qwen35::assign_scratch() {
     k_ = fbuf(kv);
     v_ = fbuf(kv);
     att_ = fbuf(heads);
-    score_ = fbuf((size_t) chunk_ * n_head_ * opt_.max_context);
+    score_ = fbuf(score_floats_);
     sg_ = fbuf(n);
     if (rows_ >= kStageRows) awork_ = fbuf(heads + heads / 2 + 1 + 3 * n * n_head_);   // a prompt batch's attention
     if (rows_ >= kStageRows && opt_.kv_format == KvFmt::kQ8_0) {
@@ -240,7 +256,7 @@ void Qwen35::assign_scratch() {
     // keeps the old path without a word, unless STRATA_FATTN=1 asked for it.
     const char* fa = std::getenv("STRATA_FATTN");
     if (rows_ >= kStageRows && !(fa && std::atoi(fa) == 0) && !fattn_) {   // assign_scratch() runs twice: say it once
-        fattn_ = fattn_fits(head_dim_, n_head_, n_kv_, rows_, (size_t) chunk_ * n_head_ * opt_.max_context);
+        fattn_ = fattn_fits(head_dim_, n_head_, n_kv_, rows_, score_floats_);
         if (fattn_ || (fa && std::atoi(fa) == 1))
             std::fprintf(stderr, "strata-poly: STRATA_FATTN: prompt attention %s\n",
                          fattn_ ? "through llama.cpp's flash-attention kernel (STRATA_FATTN=0 turns it off)"
@@ -251,7 +267,7 @@ void Qwen35::assign_scratch() {
     // STRATA_FDEC=1 from the first position, as the opt-in was.  At 100K Qwen3.6 wrote 230 tokens/s instead of 106.
     const char* fd = std::getenv("STRATA_FDEC");
     if (!(fd && std::atoi(fd) == 0) && !fdec_) {
-        fdec_ = fdec_fits(head_dim_, n_head_, n_kv_, (int) opt_.max_context, (size_t) chunk_ * n_head_ * opt_.max_context);
+        fdec_ = fdec_fits(head_dim_, n_head_, n_kv_, (int) opt_.max_context, score_floats_);
         fdec_from_ = fd && std::atoi(fd) == 1 ? 0 : 4096;
         if (fdec_ || (fd && std::atoi(fd) == 1))
             std::fprintf(stderr, "strata-poly: STRATA_FDEC: decode attention %s\n",
@@ -260,12 +276,23 @@ void Qwen35::assign_scratch() {
                                         "turns it off)"
                                       : "through the tensor-core decode kernel");
     }
+    if (opt_.kv_format == KvFmt::kTurbo) {
+        // turbo is read by fdec / fattn only (attend() and attend_batch() have no reader for it): fdec from the
+        // first position
+        if (!fdec_ || (rows_ >= kStageRows && !fattn_))
+            throw std::runtime_error("--kv turbo needs the tensor-core attention kernels (an NVIDIA card, Ampere or "
+                                     "later; STRATA_FDEC and STRATA_FATTN not 0)");
+        if (fdec_from_ != 0)
+            std::fprintf(stderr, "strata-poly: --kv turbo: decode attention through the tensor-core kernel from the "
+                                 "first position\n");
+        fdec_from_ = 0;
+    }
 #if defined(STRATA_USE_HIP)
     // STRATA_HIP_VALUE_SPLIT=1: split the long-context weighted-value reduction in HIP's attend().
     if (hip_value_split::requested(std::getenv("STRATA_HIP_VALUE_SPLIT")) && !hip_value_split_logged_) {
         const bool ready = hip_value_split::fits(
             head_dim_, n_head_, n_kv_, opt_.max_context, chunk_, 0, 0, false,
-            (size_t) chunk_ * n_head_ * opt_.max_context);
+            score_floats_);
         std::fprintf(stderr, "strata-poly: STRATA_HIP_VALUE_SPLIT: %s\n",
                      ready ? "split value reduction on supported decode calls from 12,288 keys"
                            : "unchanged (unsupported head shape, context or scratch)");
@@ -284,7 +311,17 @@ void Qwen35::save_layer(int il, int64_t, uint8_t* dst) {
        "save state");
 }
 
+// A turbo cache's arrays a token: key nibbles, key norms, value bits, value norms (the order save_card_rows() writes)
+static size_t turbo_part(int part, int n_kv) {
+    const size_t p[4] = {(size_t) n_kv * kTurboKeyBytes, (size_t) n_kv * 2 * sizeof(float),
+                         (size_t) n_kv * kTurboValBytes, (size_t) n_kv * 2 * sizeof(float)};
+    return p[part];
+}
+
 size_t Qwen35::card_row_bytes() const {
+    if (opt_.kv_format == KvFmt::kTurbo)
+        return (size_t) n_attn_ * (turbo_part(0, n_kv_) + turbo_part(1, n_kv_) + turbo_part(2, n_kv_) +
+                                   turbo_part(3, n_kv_));
     if (opt_.kv_format == KvFmt::kQ8_0)
         return (size_t) n_attn_ * 2 *
                ((size_t) n_kv_ * head_dim_ + (size_t) n_kv_ * (head_dim_ / 32) * sizeof(uint16_t));
@@ -295,6 +332,19 @@ void Qwen35::save_card_rows(int64_t first, int64_t n, uint8_t* dst) {
     if (first < 0 || n < 0 || first + n > opt_.max_context)
         throw std::logic_error("save_rows: the rows are outside the context");
     ck(cudaStreamSynchronize(cs(st_)), "save rows");
+    if (opt_.kv_format == KvFmt::kTurbo) {
+        for (const Block& B : blocks_) {
+            if (!B.k_tq || n == 0) continue;
+            const void* parts[4] = {B.k_tq, B.k_tn, B.v_tq, B.v_tn};
+            for (int i = 0; i < 4; ++i) {
+                const size_t row = turbo_part(i, n_kv_), bytes = (size_t) n * row;
+                ck(cudaMemcpy(dst, (const uint8_t*) parts[i] + (size_t) first * row, bytes, cudaMemcpyDeviceToHost),
+                   "save rows");
+                dst += bytes;
+            }
+        }
+        return;
+    }
     if (opt_.kv_format == KvFmt::kQ8_0) {
         // q8_0: each attention block writes k_codes, k_scales, v_codes, v_scales, in that order, so that a load
         // can walk the same runs back.  Same layout as card_row_bytes() sums to (n * card_row_bytes() / n_attn_).
@@ -330,6 +380,20 @@ void Qwen35::load_card_rows(const uint8_t* src, int64_t from, int64_t count, int
         throw std::logic_error("load_rows: the rows are outside what was saved");
     cover(first + n);
     ck(cudaStreamSynchronize(cs(st_)), "load rows");
+    if (opt_.kv_format == KvFmt::kTurbo) {
+        for (const Block& B : blocks_) {
+            if (!B.k_tq || n == 0) continue;
+            void* parts[4] = {B.k_tq, B.k_tn, B.v_tq, B.v_tn};
+            for (int i = 0; i < 4; ++i) {
+                const size_t row = turbo_part(i, n_kv_);
+                ck(cudaMemcpy((uint8_t*) parts[i] + (size_t) first * row, src + (size_t) (first - from) * row,
+                              (size_t) n * row, cudaMemcpyHostToDevice),
+                   "load rows");
+                src += (size_t) count * row;
+            }
+        }
+        return;
+    }
     if (opt_.kv_format == KvFmt::kQ8_0) {
         // q8_0: mirror save_card_rows run for run, advancing by each run's own saved size (count * row) so
         // multi-layer blobs line up; the rows wanted start `first - from` rows into the run.
@@ -456,7 +520,9 @@ void Qwen35::attn_store(Block& B, int64_t pos, int n) {
     head_norm_rope(kraw_, head_dim_, fp(B.k_norm), k_, head_dim_, n_kv_, n_rot_, theta_scale_, first, n, rms_eps_, st_,
                    nullptr, axes, sections_, at ? at + 1 : nullptr);
     lin(B.wv, xn_, v_, n, xq_);
-    if (opt_.kv_format == KvFmt::kQ8_0) {
+    if (opt_.kv_format == KvFmt::kTurbo) {
+        turbo_store(k_, v_, B.k_tq, B.k_tn, B.v_tq, B.v_tn, n_kv_, pos, n, at, st_);
+    } else if (opt_.kv_format == KvFmt::kQ8_0) {
         if (at) {
             store_q8_at(k_, B.k_codes, B.k_scales, n_kv_ * head_dim_, at, n, 0, st_);
             store_q8_at(v_, B.v_codes, B.v_scales, n_kv_ * head_dim_, at, n, 0, st_);
@@ -492,6 +558,21 @@ void Qwen35::attn(Block& B, int64_t pos, int n) {
                    st_, nullptr, axes, sections_, at ? at + 1 : nullptr);
     attn_store(B, pos, n);
     const float scale = 1.f / std::sqrt((float) head_dim_);
+    if (opt_.kv_format == KvFmt::kTurbo) {
+        // the queries turned as the keys were, the output back from the values' turn (fattn.hpp's Kvtq)
+        const Kvtq kt{B.k_tq, B.k_tn}, vt{B.v_tq, B.v_tn};
+        const size_t sf = score_floats_;
+        turbo_rotate(q_, n * n_head_, false, st_);
+        const bool done = n >= kStageRows
+                              ? fattn_tq(q_, kt, vt, pos, n, att_, head_dim_, n_head_, n_kv_, scale, score_, sf, st_)
+                              : fdec_tq(q_, kt, vt, pos, n, at, at ? room(n) : 0, att_, head_dim_, n_head_, n_kv_,
+                                        scale, score_, sf, st_);
+        if (!done) throw std::runtime_error("--kv turbo: no attention kernel took this call");
+        turbo_rotate(att_, n * n_head_, true, st_);
+        mul_sigmoid(att_, qg_ + head_dim_, head_dim_, n * n_head_, 2 * head_dim_, false, st_);
+        lin(B.wo, att_, ao_, n);
+        return;
+    }
     const bool q8 = opt_.kv_format == KvFmt::kQ8_0;
     // a prompt batch through cuBLAS; a few tokens with the kernels that give a token the same bits in any company
     if (n >= kStageRows) {
@@ -501,7 +582,7 @@ void Qwen35::attn(Block& B, int64_t pos, int n) {
         const uint16_t* vc = q8 ? nullptr : B.vals;
         uint16_t* kw = q8 ? (uint16_t*) q8w_ : nullptr;
         uint16_t* vw = q8 ? kw + work_halves_ : nullptr;
-        const size_t score_floats = (size_t) chunk_ * n_head_ * opt_.max_context;
+        const size_t score_floats = score_floats_;
         if (!(fattn_ && (q8 ? fattn_q8(q_, Kvq8{B.k_codes, B.k_scales}, Kvq8{B.v_codes, B.v_scales}, pos, n, att_,
                                        head_dim_, n_head_, n_kv_, scale, score_, score_floats, st_)
                             : fattn_f16(q_, B.keys, B.vals, pos, n, att_, head_dim_, n_head_, n_kv_, scale, score_,
@@ -512,9 +593,9 @@ void Qwen35::attn(Block& B, int64_t pos, int n) {
     } else if (!(fdec_ && pos >= fdec_from_ &&
                  (q8 ? fdec_q8(q_, Kvq8{B.k_codes, B.k_scales}, Kvq8{B.v_codes, B.v_scales}, pos, n, at,
                                         at ? room(n) : 0, att_, head_dim_, n_head_, n_kv_, scale, score_,
-                                        (size_t) chunk_ * n_head_ * opt_.max_context, st_)
+                                        score_floats_, st_)
                               : fdec_f16(q_, B.keys, B.vals, pos, n, at, at ? room(n) : 0, att_, head_dim_, n_head_,
-                                         n_kv_, scale, score_, (size_t) chunk_ * n_head_ * opt_.max_context, st_))))
+                                         n_kv_, scale, score_, score_floats_, st_))))
         attend(q_, q8 ? nullptr : B.keys, q8 ? nullptr : B.vals, pos, n, score_, chunk_, att_, head_dim_, n_head_,
                n_kv_, scale, st_, 0, 0, false, at, at ? room(n) : 0, /*score_floats*/ 0,
                q8 ? Kvq8{B.k_codes, B.k_scales} : Kvq8{}, q8 ? Kvq8{B.v_codes, B.v_scales} : Kvq8{});
@@ -532,6 +613,7 @@ void Qwen35::attn_block_pass(Block& B, int64_t pos, int n) {
     head_norm_rope(qg_, 2 * head_dim_, fp(B.q_norm), q_, head_dim_, n_head_, n_rot_, theta_scale_, first, n, rms_eps_,
                    st_, nullptr, axes, sections_, at ? at + 1 : nullptr);
     attn_store(B, pos, n);
+    if (opt_.kv_format == KvFmt::kTurbo) throw std::logic_error("--kv turbo has no block of guesses");
     const bool q8 = opt_.kv_format == KvFmt::kQ8_0;
     attend(q_, q8 ? nullptr : B.keys, q8 ? nullptr : B.vals, pos, n, score_, chunk_, att_, head_dim_, n_head_, n_kv_,
            1.f / std::sqrt((float) head_dim_), st_, 0, 0, true, at, at ? room(n) : 0, 0,
@@ -560,6 +642,23 @@ void Qwen35::attn_rows(Block& B, int n) {
                        rms_eps_, st_, nullptr, nullptr, sections_, ai + 1);
         Kvq8 kq{}, vq{};
         uint16_t *kc = nullptr, *vc = nullptr;
+        if (opt_.kv_format == KvFmt::kTurbo) {
+            uint8_t* ktq = (uint8_t*) seq_buf(r.seq, B.k_tq);
+            float* ktn = (float*) seq_buf(r.seq, B.k_tn);
+            uint8_t* vtq = (uint8_t*) seq_buf(r.seq, B.v_tq);
+            float* vtn = (float*) seq_buf(r.seq, B.v_tn);
+            turbo_store(k_ + i * kv, v_ + i * kv, ktq, ktn, vtq, vtn, n_kv_, 0, 1, ai, st_);
+            const int64_t keep = pos_;
+            pos_ = r.pos;
+            const int sized = room(1);
+            pos_ = keep;
+            turbo_rotate(q_ + i * hq, n_head_, false, st_);
+            if (!fdec_tq(q_ + i * hq, Kvtq{ktq, ktn}, Kvtq{vtq, vtn}, r.pos, 1, ai, sized, att_ + i * hq, head_dim_,
+                         n_head_, n_kv_, scale, score_, score_floats_, st_))
+                throw std::runtime_error("--kv turbo: no attention kernel took this call");
+            turbo_rotate(att_ + i * hq, n_head_, true, st_);
+            continue;
+        }
         if (q8) {
             kq = {(int8_t*) seq_buf(r.seq, B.k_codes), (uint16_t*) seq_buf(r.seq, B.k_scales)};
             vq = {(int8_t*) seq_buf(r.seq, B.v_codes), (uint16_t*) seq_buf(r.seq, B.v_scales)};
@@ -575,7 +674,7 @@ void Qwen35::attn_rows(Block& B, int n) {
         pos_ = r.pos;
         const int sized = room(1);
         pos_ = keep;
-        const size_t sf = (size_t) chunk_ * n_head_ * opt_.max_context;
+        const size_t sf = score_floats_;
         if (!(fdec_ && r.pos >= fdec_from_ &&
               (q8 ? fdec_q8(q_ + i * hq, kq, vq, r.pos, 1, ai, sized, att_ + i * hq, head_dim_, n_head_, n_kv_,
                                      scale, score_, sf, st_)

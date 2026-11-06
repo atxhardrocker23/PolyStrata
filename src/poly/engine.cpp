@@ -1184,6 +1184,13 @@ std::unique_ptr<Engine> Engine::open(const Options& o) {
                                  "' model");
     // int8 and int8k are Gemma 4's: their readers are not the arithmetic q8_0's are, so a model takes one
     // family or the other rather than a choice between them.
+    // turbo (TurboQuant: K 4-bit, V 3-bit, rotated) has readers for Qwen3.5 / 3.6's heads of 256 only, and
+    // none for a block of guesses (Clover)
+    if (o.kv_format == KvFmt::kTurbo && name != "qwen35moe")
+        throw std::runtime_error("--kv turbo is supported for qwen35moe models; this is a '" + name + "' model");
+#if defined(STRATA_USE_HIP)
+    if (o.kv_format == KvFmt::kTurbo) throw std::runtime_error("--kv turbo needs an NVIDIA card (CUDA build)");
+#endif
     if (name != "gemma4" && (o.kv_format == KvFmt::kInt8 || o.kv_format == KvFmt::kInt8K))
         throw std::runtime_error("--kv int8 and --kv int8k are Gemma 4's; for a qwen35moe or kolibri1 model use "
                                  "--kv q8_0 (this is a '" + name + "' model)");
