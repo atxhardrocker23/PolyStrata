@@ -42,6 +42,7 @@ protected:
     void moe_shared(const Layer& L, int il, int n) override;
     void block_attend(int64_t pos, int n) override;
     void block_rows(int64_t pos, int n) override;
+    void block_dense_ffn(int n) override;
     int head_key(int il, int n) const override;
     bool batch_heads() const override { return true; }
     int64_t turn(int64_t row) const override;
@@ -71,8 +72,11 @@ private:
         int8_t*   v_codes  = nullptr;
         uint16_t* v_scales = nullptr;
         Dev sh_gate_inp;   ///< the shared expert's gate
+        // dense FFN (architecture "qwen35")
+        Dev ffn_gate, ffn_up, ffn_down;
     };
 
+    void dense_ffn(Block& B, int il, int n);
     void gdn(Block& B, int n);
     void gdn_block_pass(Block& B, int n);
     void attn(Block& B, int64_t pos, int n);

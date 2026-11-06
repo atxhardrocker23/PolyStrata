@@ -102,6 +102,9 @@ void Qwen35::load_geometry() {
     }
     theta_scale_ = std::pow(shape_f("rope.freq_base"), -2.f / (float) n_rot_);
 
+    const MetaValue* ff = find("feed_forward_length");
+    if (ff) n_ff_ = (int) ff->u;
+
     // this architecture puts no limit on a SwiGLU's inputs
     clamp_exp_.assign((size_t) n_layer_ + 1, INFINITY);
     clamp_shexp_ = clamp_exp_;
@@ -147,8 +150,15 @@ void Qwen35::load_layer(int il) {
         B.wo = mat("attn_output.weight", (int64_t) n_head_ * head_dim_, n_embd_);
         ++n_attn_;
     }
-    load_moe(il);
-    B.sh_gate_inp = f32("ffn_gate_inp_shexp.weight", n_embd_);
+    if (n_expert_ > 0) {
+        load_moe(il);
+        B.sh_gate_inp = f32("ffn_gate_inp_shexp.weight", n_embd_);
+    } else {
+        L.moe = false;
+        B.ffn_gate = mat("ffn_gate.weight", n_embd_, n_ff_);
+        B.ffn_up = mat("ffn_up.weight", n_embd_, n_ff_);
+        B.ffn_down = mat("ffn_down.weight", n_ff_, n_embd_);
+    }
 }
 
 size_t Qwen35::recurrent_floats() const {
@@ -605,10 +615,29 @@ void Qwen35::layer_head(Layer& L, int il, int n) {
 
     kernels::native_add_rms_norm_q8_1(r_, ao_, fp(L.ffn_norm), xn_, xq_, n_embd_, n, rms_eps_, threads, st_);
     dbg("ffn_in", il, xn_, n_embd_);
-    if (!batched(L, n)) moe_router(L, n);
+    if (!L.moe) {
+        dense_ffn(B, il, n);
+        dbg("ffn", il, fo_, n_embd_);
+        axpy(fo_, 1.f, r_, n * n_embd_, true, st_);
+    } else if (!batched(L, n)) {
+        moe_router(L, n);
+    }
 }
 
-void Qwen35::layer_tail(Layer&, int, int n) { axpy(fo_, 1.f, r_, n * n_embd_, true, st_); }
+void Qwen35::layer_tail(Layer& L, int, int n) {
+    if (L.moe) axpy(fo_, 1.f, r_, n * n_embd_, true, st_);
+}
+
+void Qwen35::dense_ffn(Block& B, int il, int n) {
+    lin(B.ffn_gate, xn_, g_, n, xq_);
+    lin(B.ffn_up, xn_, u_, n, xq_);
+    swiglu_clamp(g_, u_, h_, n * n_ff_, clamp_shexp_[(size_t) il], st_);
+    lin(B.ffn_down, h_, fo_, n);
+}
+
+void Qwen35::block_dense_ffn(int n) {
+    dense_ffn(blocks_[(size_t) n_layer_], n_layer_, n);
+}
 
 void Qwen35::output_rows(int first, int rows, float* h) {
     rms_norm(r_ + (size_t) first * n_embd_, fp(out_norm_), h, n_embd_, rows, rms_eps_, st_);

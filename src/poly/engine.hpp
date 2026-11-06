@@ -447,6 +447,7 @@ protected:
     /// its output, and the tokens leave their rows in its caches.  block_rows() only leaves the rows.
     virtual void block_attend(int64_t pos, int n) { (void) pos, (void) n; }
     virtual void block_rows(int64_t pos, int n) { (void) pos, (void) n; }
+    virtual void block_dense_ffn(int n) { (void) n; }
     /// Which recording of a layer's head fits n tokens from pos().  Launches that are sized by the rows they read
     /// are recorded once for each size (room()), and the architecture numbers the sizes from 0.
     virtual int head_key(int il, int n) const { (void) il, (void) n; return 0; }

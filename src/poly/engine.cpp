@@ -1095,17 +1095,29 @@ void Engine::load_shape() {
     const TensorInfo* te = gg_->find("token_embd.weight");
     n_vocab_ = vocab ? (int) vocab->u : te && te->shape.size() == 2 ? (int) te->shape[1] : 0;
     rms_eps_ = shape_f("attention.layer_norm_rms_epsilon");
-    n_expert_ = shape_i("expert_count");
-    n_used_ = shape_i("expert_used_count");
-    n_ff_exp_ = shape_i("expert_feed_forward_length");
-    const MetaValue* shexp = meta_in(*gg_, "expert_shared_feed_forward_length");
-    n_ff_shexp_ = shexp ? (int) shexp->u : n_ff_exp_;
+    const MetaValue* exp = meta_in(*gg_, "expert_count");
+    if (exp) {
+        n_expert_ = (int) exp->u;
+        n_used_ = shape_i("expert_used_count");
+        n_ff_exp_ = shape_i("expert_feed_forward_length");
+        const MetaValue* shexp = meta_in(*gg_, "expert_shared_feed_forward_length");
+        n_ff_shexp_ = shexp ? (int) shexp->u : n_ff_exp_;
+    } else {
+        n_expert_ = 0;
+        n_used_ = 0;
+        n_ff_exp_ = 0;
+        n_ff_shexp_ = 0;
+        const MetaValue* ff = meta_in(*gg_, "feed_forward_length");
+        if (ff) n_ff_ = (int) ff->u;
+    }
 
     auto need = [](bool ok, const char* what) {
         if (!ok) throw std::runtime_error(std::string("unsupported model: ") + what);
     };
     need(n_layer_ > 0 && n_embd_ > 0 && n_embd_ % 32 == 0 && n_vocab_ > 0, "bad block_count or embedding_length");
-    need(n_used_ >= 1 && n_used_ <= kMaxUsed && n_used_ <= n_expert_, "bad expert_used_count");
+    if (n_expert_ > 0) {
+        need(n_used_ >= 1 && n_used_ <= kMaxUsed && n_used_ <= n_expert_, "bad expert_used_count");
+    }
 
     // a block from another file must be this model's: a pruned model's has fewer experts to choose among
     if (block_ && block_ != gg_.get()) {
@@ -1189,7 +1201,7 @@ std::unique_ptr<Engine> Engine::open(const Options& o) {
     const MetaValue* arch = file.get("general.architecture");
     const std::string name = arch ? arch->s : std::string();
     // Clover is a qwen35moe model trained to also guess a block of tokens at once (Qwen35)
-    const bool qwen35 = name == "qwen35moe" || name == "clover_moe";
+    const bool qwen35 = name == "qwen35moe" || name == "clover_moe" || name == "qwen35";
     if (o.kv_format == KvFmt::kQ8_0 && !qwen35 && name != "kolibri1")
         throw std::runtime_error("--kv q8_0 is supported for qwen35moe and kolibri1 models in v1; this is a '" + name +
                                  "' model");
@@ -1200,7 +1212,7 @@ std::unique_ptr<Engine> Engine::open(const Options& o) {
                                  "--kv q8_0 (this is a '" + name + "' model)");
     Options opt = o;
     // moe() weighs the picks as a softmax of their scores, which is how only this architecture's router does
-    if (opt.cache_bias > 0.f && !qwen35) {
+    if (opt.cache_bias > 0.f && (!qwen35 || name == "qwen35")) {
         std::fprintf(stderr, "strata-poly: note: --cache-bias is supported for qwen35moe models; ignored for '%s'\n", name.c_str());
         opt.cache_bias = 0.f;
         opt.cache_bias_outer = -1.f;
@@ -4789,11 +4801,15 @@ void Engine::draft_step(int32_t token, int i) {
     block_attend(pos_ + i, 1);
     const int threads = sum_threads(n_embd_);
     kernels::native_add_rms_norm_q8_1(x, ao_, fp(L.ffn_norm), xn_, xq_, n_embd_, 1, rms_eps_, threads, st_);
-    moe_router(L, 1);
-    ck(cudaEventRecord((cudaEvent_t) ev_, cs(st_)), "router");
-    moe_shared(L, n_layer_, 1);
-    tok_ = nullptr;   // a guess's row has no token of the sequence
-    if (moe(L, n_layer_, 1)) moe_add(1);
+    if (!L.moe) {
+        block_dense_ffn(1);
+    } else {
+        moe_router(L, 1);
+        ck(cudaEventRecord((cudaEvent_t) ev_, cs(st_)), "router");
+        moe_shared(L, n_layer_, 1);
+        tok_ = nullptr;   // a guess's row has no token of the sequence
+        if (moe(L, n_layer_, 1)) moe_add(1);
+    }
     kernels::native_add_rms_norm_q8_1(x, fo_, fp(d_head_), own, q8_, n_embd_, 1, rms_eps_, threads, st_);
     Dev head = output_;   // the matrix's first rows are the common tokens'
     head.n_out = draft_rows();
