@@ -2920,6 +2920,7 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
     for (Layer* L : all)
         if (!mtp_only || L == &m.mtp) host += L->stride * (size_t) ne + kMmqTail;
     uint8_t* arena = nullptr;
+    bool pinned = false;
 #if defined(_WIN32)
     arena = (uint8_t*) VirtualAlloc(NULL, host, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!arena) {
@@ -2928,15 +2929,17 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
     }
     strata::platform::lock_resident(arena, (uint64_t) host);
     constexpr size_t kPinChunk = 512ULL << 20;
+    pinned = true;
     for (size_t poff = 0; poff < host; poff += kPinChunk) {
         size_t cur = std::min(kPinChunk, host - poff);
         if (cudaHostRegister(arena + poff, cur, cudaHostRegisterPortable) != cudaSuccess) {
             cudaGetLastError();
+            pinned = false;
             break;
         }
     }
 #else
-    bool pinned = cudaHostAlloc((void**) &arena, host, cudaHostAllocDefault) == cudaSuccess;
+    pinned = cudaHostAlloc((void**) &arena, host, cudaHostAllocDefault) == cudaSuccess;
     if (!pinned) {
         (void) cudaGetLastError();
         arena = (uint8_t*) std::malloc(host);

@@ -56,10 +56,6 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
-if(MSVC)
-  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/arch:AVX2>)
-endif()
-
 option(STRATA_ENABLE_CUDA "Build the CUDA targets (Phase 2+)" OFF)
 # AMD gfx906 (MI50, wave64): the same .cu sources compiled as HIP through the gfx906 compat layer.  The CUDA runtime and
 # cuBLAS names are mapped by the headers in include/strata/platform/hip_compat/, which go first on the include path,
