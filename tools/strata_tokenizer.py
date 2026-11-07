@@ -233,7 +233,7 @@ class Tokenizer:
             tokens[i] = t
         # a vocabulary whose pieces can hold a newline keeps its merges as JSON
         merges = json.loads((path / "merges.json").read_text(encoding="utf-8")) if (path / "merges.json").exists() \
-            else (path / "merges.txt").read_text(encoding="utf-8").split("\n")
+            else (path / "merges.txt").read_text(encoding="utf-8").splitlines()
         types = json.loads((path / "token_type.json").read_text())
         # the pre-tokenizer's name and the GGUF's special ids (a directory from before they mattered has neither)
         meta = json.loads((path / "tokenizer.json").read_text(encoding="utf-8")) \
