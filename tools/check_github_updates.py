@@ -113,7 +113,7 @@ def main():
                 })
 
     # 4. Check Ecosystem Add-ons (e.g. ComfyUI-PolyStrata)
-    print("[4/4] Checking community add-ons...")
+    print("[4/5] Checking community add-ons...")
     addons = [
         "bananasss00/ComfyUI-PolyStrata",
         "SRZhu26/PolyStrata"
@@ -130,6 +130,11 @@ def main():
                 "msg": latest["commit"]["message"].splitlines()[0],
                 "url": f"https://github.com/{repo}"
             })
+
+    # 5. Check Upstream Engine Releases & PRs
+    print("[5/5] Checking Strata engine releases & PolyStrata PRs...")
+    strata_releases = fetch_json("https://api.github.com/repos/Niko1221/Strata/releases?per_page=3")
+    poly_prs = fetch_json("https://api.github.com/repos/VecSzn/PolyStrata/pulls?state=open&per_page=5")
 
     # Save updated state
     save_state(state)
@@ -152,6 +157,11 @@ def main():
     else:
         lines.append("[OK] Your local PolyStrata is up-to-date with upstream HEAD.")
 
+    if isinstance(poly_prs, list) and poly_prs:
+        lines.append("\n**Open Pull Requests of Interest:**")
+        for p in poly_prs:
+            lines.append(f"- [#{p['number']}: {p['title']}]({p['html_url']}) by {p['user']['login']} ({p['updated_at'][:10]})")
+
     lines.extend([
         "",
         "## 2. Upstream am2strata (abhaymin/am2strata)",
@@ -169,7 +179,17 @@ def main():
 
     lines.extend([
         "",
-        "## 3. Notable Community Forks & New Models",
+        "## 3. Upstream Engine (Niko1221/Strata)",
+    ])
+    if isinstance(strata_releases, list) and strata_releases:
+        for r in strata_releases:
+            lines.append(f"- [{r['name']} ({r['tag_name']})]({r['html_url']}) - Published: {r['published_at'][:10]}")
+    else:
+        lines.append("[OK] Engine checked.")
+
+    lines.extend([
+        "",
+        "## 4. Notable Community Forks & New Models",
     ])
 
     if active_forks:
@@ -180,7 +200,7 @@ def main():
 
     lines.extend([
         "",
-        "## 4. Community Add-Ons & Integrations",
+        "## 5. Community Add-Ons & Integrations",
     ])
 
     for a in addon_reports:
