@@ -3,6 +3,7 @@
 Run: python -m unittest serve.test_effort_modes -v
 """
 import unittest
+from pathlib import Path
 
 from serve.frontend import (ChatTemplate, effort_levels, openai_to_messages, with_effort_instruction)  # noqa: E402
 
@@ -70,6 +71,9 @@ class Templates(unittest.TestCase):
     """The template families this host serves, through ChatTemplate's own detection."""
 
     def _template(self, path):
+        p = Path(path)
+        if not p.exists():
+            self.skipTest(f"Pack template not found at {path}")
         return ChatTemplate(path)
 
     def test_qwen38_default_template_reads_the_level(self):
