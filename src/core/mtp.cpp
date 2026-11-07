@@ -317,7 +317,10 @@ bool MtpDrafter::load(const std::string& rt_dir, const ModelGeometry& g, Session
             FILE* f;
             ~Closer() { if (f != nullptr) std::fclose(f); }
         } closer{f};
-        if (cudaMalloc((void**) &experts_, bytes) != cudaSuccess) { err = "mtp: the 512 experts do not fit in VRAM"; return false; }
+        if (cudaMalloc((void**) &experts_, bytes) != cudaSuccess) {
+            err = "mtp: the " + std::to_string(g.n_expert) + " experts do not fit in VRAM";
+            return false;
+        }
 #if !defined(_WIN32)
         strata::platform::advise_willneed(fileno(f), 0, bytes);
 #endif

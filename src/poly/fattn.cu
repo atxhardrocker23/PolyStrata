@@ -134,6 +134,163 @@ __global__ void dequant_kernel(const int8_t* __restrict__ codes, const uint16_t*
     out[size_t(r) * width + i] = x;
 }
 
+// ---- TurboQuant (--kv turbo), as moex's: see Kvtq in the header ----
+
+__constant__ float TQ_S1[128] = {
+    -1, 1, 1,-1,-1, 1,-1, 1,-1,-1, 1, 1, 1, 1, 1, 1, 1,-1, 1,-1, 1,-1,-1, 1, 1, 1,-1, 1, 1,-1,-1,-1,
+    -1, 1, 1,-1, 1, 1,-1, 1,-1, 1, 1,-1,-1, 1,-1, 1, 1, 1, 1,-1,-1,-1,-1,-1, 1,-1, 1, 1, 1, 1,-1, 1,
+    -1,-1, 1,-1,-1,-1, 1,-1,-1,-1, 1,-1,-1,-1, 1, 1, 1,-1,-1, 1, 1, 1,-1,-1, 1, 1,-1, 1, 1,-1, 1,-1,
+    -1, 1, 1,-1, 1,-1, 1,-1, 1, 1, 1, 1,-1, 1,-1, 1, 1,-1, 1, 1,-1,-1,-1,-1,-1, 1, 1,-1, 1, 1,-1, 1};
+__constant__ float TQ_S2[128] = {
+     1, 1, 1, 1,-1, 1, 1,-1, 1,-1,-1,-1, 1,-1,-1,-1, 1, 1,-1,-1, 1,-1, 1,-1, 1,-1,-1, 1,-1, 1, 1, 1,
+     1, 1,-1,-1,-1, 1,-1,-1,-1,-1,-1,-1, 1, 1, 1,-1, 1,-1, 1, 1, 1,-1,-1, 1,-1,-1,-1,-1,-1,-1, 1, 1,
+     1,-1, 1,-1,-1,-1,-1, 1,-1, 1,-1, 1,-1,-1, 1, 1,-1, 1,-1, 1, 1,-1, 1,-1,-1,-1,-1, 1,-1,-1, 1,-1,
+     1,-1, 1, 1, 1,-1,-1, 1,-1, 1,-1, 1, 1,-1,-1, 1,-1, 1,-1, 1, 1,-1, 1,-1, 1,-1,-1,-1,-1,-1, 1,-1};
+// the centroids as int8 codes (round(127 c / c_max)), so a turbo row reads as a q8 one: value = code * K * norm
+__constant__ int8_t TQ_I4[16] = {-127, -96, -75, -58, -44, -31, -18, -6, 6, 18, 31, 44, 58, 75, 96, 127};
+__constant__ int8_t TQ_I3[8] = {-127, -79, -45, -14, 14, 45, 79, 127};
+constexpr float kTqK4 = 0.241529f / 127.f, kTqK3 = 0.190207f / 127.f;
+__constant__ float TQ_M4[15] = {-0.212203f, -0.162947f, -0.127026f, -0.097164f, -0.070671f, -0.046174f, -0.022824f, 0.f,
+                                0.022824f, 0.046174f, 0.070671f, 0.097164f, 0.127026f, 0.162947f, 0.212203f};
+__constant__ float TQ_M3[7] = {-0.154496f, -0.092804f, -0.044243f, 0.f, 0.044243f, 0.092804f, 0.154496f};
+
+// The transform of the two 128-value halves of a 256-thread block's vector (thread d holds value d): signs,
+// butterflies, 1/sqrt(128), signs; inverse: the same backwards.  sh: 256 floats.
+__device__ __forceinline__ float tq_wht(float x, float* sh, int inverse) {
+    const int d = threadIdx.x, j = d & 127, lane = d & 31;
+    float v = x * (inverse ? TQ_S2[j] : TQ_S1[j]);
+#pragma unroll
+    for (int h = 1; h < 32; h <<= 1) {
+        const float o = __shfl_xor_sync(0xffffffffu, v, h);
+        v = (lane & h) ? o - v : v + o;
+    }
+    __syncthreads();
+    sh[d] = v;
+    __syncthreads();
+    if (!(j & 32)) {
+        const float a = sh[d], b = sh[d + 32];
+        sh[d] = a + b;
+        sh[d + 32] = a - b;
+    }
+    __syncthreads();
+    if (!(j & 64)) {
+        const float a = sh[d], b = sh[d + 64];
+        sh[d] = a + b;
+        sh[d + 64] = a - b;
+    }
+    __syncthreads();
+    return sh[d] * 0.08838834764831845f * (inverse ? TQ_S1[j] : TQ_S2[j]);
+}
+
+// the sum over the thread's 128-thread half of the block; sh: 8 floats
+__device__ __forceinline__ float tq_half_sum(float v, float* sh) {
+#pragma unroll
+    for (int o = 16; o > 0; o >>= 1) v += __shfl_xor_sync(0xffffffffu, v, o);
+    const int w = threadIdx.x >> 5;
+    __syncthreads();
+    if ((threadIdx.x & 31) == 0) sh[w] = v;
+    __syncthreads();
+    const int b = (w >> 2) << 2;
+    return sh[b] + sh[b + 1] + sh[b + 2] + sh[b + 3];
+}
+
+// value x's centroid (BITS 4 or 3); norm: its half's, corrected so that the dequantized half has x's length.
+// sh: 264 floats.
+template <int BITS>
+__device__ __forceinline__ int tq_quant(float x, float* sh, float& norm) {
+    const float n = sqrtf(tq_half_sum(x * x, sh + kD));
+    const float r = tq_wht(n > 1e-20f ? x / n : 0.f, sh, 0);
+    int idx = 0;
+    if (BITS == 4) {
+#pragma unroll
+        for (int i = 0; i < 15; i++) idx += r >= TQ_M4[i];
+    } else {
+#pragma unroll
+        for (int i = 0; i < 7; i++) idx += r >= TQ_M3[i];
+    }
+    const float c = BITS == 4 ? TQ_I4[idx] * kTqK4 : TQ_I3[idx] * kTqK3;
+    const float rn = sqrtf(tq_half_sum(c * c, sh + kD));
+    norm = rn > 1e-20f ? n / rn : n;
+    return idx;
+}
+
+// One CUDA block a kv head (x) and token (y), a thread a value.
+__global__ void turbo_store_kernel(const float* __restrict__ k, const float* __restrict__ v, uint8_t* __restrict__ kq,
+                                   float* __restrict__ kn, uint8_t* __restrict__ vq, float* __restrict__ vn,
+                                   int kv_heads, long long pos, const long long* __restrict__ at) {
+    __shared__ float sh[kD + 8];
+    const int h = blockIdx.x, tok = blockIdx.y, d = threadIdx.x, j = d & 127, b = d >> 7, lane = d & 31;
+    const long long row = (at ? *at : pos) + tok;
+    const size_t src = ((size_t) tok * kv_heads + h) * kD + d, dst = (size_t) row * kv_heads + h;
+    float nk, nv;
+    const int ik = tq_quant<4>(k[src], sh, nk);
+    const int iv = tq_quant<3>(v[src], sh, nv);
+    uint8_t* K = kq + dst * kTurboKeyBytes;
+    uint8_t* V = vq + dst * kTurboValBytes;
+    const int ik1 = __shfl_down_sync(0xffffffffu, ik, 1);
+    if (!(j & 1)) K[d / 2] = (uint8_t) (ik | (ik1 << 4));
+    const int lo = iv & 3;
+    const int q4 = lo | (__shfl_down_sync(0xffffffffu, lo, 1) << 2) | (__shfl_down_sync(0xffffffffu, lo, 2) << 4) |
+                   (__shfl_down_sync(0xffffffffu, lo, 3) << 6);
+    if (!(j & 3)) V[d / 4] = (uint8_t) q4;
+    const unsigned hb = __ballot_sync(0xffffffffu, iv & 4);
+    if (!(j & 7)) V[64 + d / 8] = (uint8_t) (hb >> (lane & ~7));
+    if (j == 0) {
+        kn[dst * 2 + b] = nk;
+        vn[dst * 2 + b] = nv;
+    }
+}
+
+__global__ void turbo_rotate_kernel(float* __restrict__ x, int inverse) {
+    __shared__ float sh[kD];
+    float* p = x + (size_t) blockIdx.x * kD;
+    const float y = tq_wht(p[threadIdx.x], sh, inverse);
+    p[threadIdx.x] = y;
+}
+
+// dequant_kernel() for a TurboQuant cache (value: its V side), rotated as it is stored
+__global__ void tq_dequant_kernel(const uint8_t* __restrict__ codes, const float* __restrict__ norms,
+                                  half* __restrict__ out, int kv_heads, long long row, int valid, int value) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x, width = kv_heads * kD;
+    if (i >= width) return;
+    const int r = blockIdx.y, h = i / kD, d = i % kD;
+    float x = 0.f;
+    if (r < valid) {
+        const size_t at = (size_t) (row + r) * kv_heads + h;
+        const float nrm = norms[at * 2 + (d >> 7)];
+        if (value) {
+            const uint8_t* vr = codes + at * kTurboValBytes;
+            const int idx = ((vr[d >> 2] >> (2 * (d & 3))) & 3) | (((vr[64 + (d >> 3)] >> (d & 7)) & 1) << 2);
+            x = TQ_I3[idx] * kTqK3 * nrm;
+        } else {
+            const uint32_t byte = codes[at * kTurboKeyBytes + (d >> 1)];
+            x = TQ_I4[(d & 1) ? byte >> 4 : byte & 15] * kTqK4 * nrm;
+        }
+    }
+    out[size_t(r) * width + i] = __float2half(x);
+}
+
+// fdec_kernel's reads of a TurboQuant cache: 4 codes from 4 nibbles of u (from bit sh on), from 4 3-bit indices
+__device__ __forceinline__ uint32_t tq_codes4(uint32_t u, const int8_t* ci, int sh) {
+    return (uint32_t) (uint8_t) ci[(u >> sh) & 15] | (uint32_t) (uint8_t) ci[(u >> (sh + 4)) & 15] << 8 |
+           (uint32_t) (uint8_t) ci[(u >> (sh + 8)) & 15] << 16 | (uint32_t) (uint8_t) ci[(u >> (sh + 12)) & 15] << 24;
+}
+
+__device__ __forceinline__ uint32_t tq_codes3(uint32_t lo, uint32_t hb, const int8_t* ci, int j0) {
+    uint32_t r = 0;
+#pragma unroll
+    for (int j = 0; j < 4; ++j) {
+        const int idx = ((lo >> (2 * (j0 + j))) & 3) | (((hb >> (j0 + j)) & 1) << 2);
+        r |= (uint32_t) (uint8_t) ci[idx] << (8 * j);
+    }
+    return r;
+}
+
+__device__ __forceinline__ uint32_t tq_scale2(float x) {   // a scale as fdec_kernel's pairs of halves hold it
+    const uint32_t h = __half_as_ushort(__float2half(x));
+    return h | (h << 16);
+}
+
 // The last step of keys a tile of tokens reads in the causal block: token j sees the keys up to j + delta.
 template <int Cols1>
 __global__ void kv_max_kernel(int* __restrict__ kv_max, int tiles, int n, long long delta, int keys, int step) {
@@ -161,7 +318,8 @@ __global__ void merge_kernel(float* __restrict__ out, float2* __restrict__ meta,
 // The q8 cache (kq8, vq8) or the fp16 one (keys, vals): an fp16 cache's whole steps before pos are read where they
 // lie, in one block, and only the last block is copied into the scratch.
 template <int Group>
-bool run(const float* q, Kvq8 kq8, Kvq8 vq8, const half* keys, const half* vals, int64_t pos, int n, float* out,
+bool run(const float* q, Kvq8 kq8, Kvq8 vq8, Kvtq ktq, Kvtq vtq, const half* keys, const half* vals, int64_t pos,
+         int n, float* out,
          int dim, int n_head, int kv_heads, float scale, float* scratch, size_t scratch_floats, void* stream) {
     if (n <= 0 || !fattn_fits(dim, n_head, kv_heads, n, scratch_floats)) return false;
     constexpr int kCols1 = kCols / Group;
@@ -199,6 +357,11 @@ bool run(const float* q, Kvq8 kq8, Kvq8 vq8, const half* keys, const half* vals,
         const half* vb = vw;
         if (keys && !last) {
             kb = keys, vb = vals;
+        } else if (ktq.codes) {
+            tq_dequant_kernel<<<dim3(grid(width, 256), nk), 256, 0, s>>>(ktq.codes, ktq.norms, kw, kv_heads, k0,
+                                                                         (int) m, 0);
+            tq_dequant_kernel<<<dim3(grid(width, 256), nk), 256, 0, s>>>(vtq.codes, vtq.norms, vw, kv_heads, k0,
+                                                                         (int) m, 1);
         } else {
             dequant_kernel<<<dim3(grid(width, 256), nk), 256, 0, s>>>(kq8.codes, kq8.scales, keys, kw, width, k0,
                                                                       (int) m);
@@ -274,7 +437,7 @@ __device__ __forceinline__ float scale_of(const uint4& v, int b) {   // half b o
 // token comes out the same to the bit whatever tokens the launch has beside it.  The dimensions are numbered as
 // suits the reads (a thread's 8 values of a block of K, its 8 dimensions of V), which the sums don't see.  F16: an
 // fp16 cache (kc and vc are halves, no scales), read as it is.
-template <int MT, bool F16, int Group>
+template <int MT, bool F16, int Group, bool TQ = false>
 __global__ void __launch_bounds__(kDecWarps * WARP_SIZE)
 fdec_kernel(const float* __restrict__ q, const void* __restrict__ kc, const uint16_t* __restrict__ ks,
             const void* __restrict__ vc, const uint16_t* __restrict__ vs, long long pos,
@@ -284,6 +447,9 @@ fdec_kernel(const float* __restrict__ q, const void* __restrict__ kc, const uint
     __shared__ __align__(16) half Qs[Q * QS];
     __shared__ __align__(16) half Ps[Q * PS];
     __shared__ float red[2][kDecWarps][Q];
+    __shared__ int8_t ci4[16], ci3[8];   // TQ: the centroids' codes
+    if (TQ && threadIdx.x < 16) ci4[threadIdx.x] = TQ_I4[threadIdx.x];
+    if (TQ && threadIdx.x < 8) ci3[threadIdx.x] = TQ_I3[threadIdx.x];
     const int w = threadIdx.x / WARP_SIZE, lane = threadIdx.x % WARP_SIZE, g8 = lane / 4, t = lane % 4;
     const int grp = blockIdx.y, split = blockIdx.x;
     const long long p0 = (at ? *at : pos) + first, last = p0 + tokens - 1, r0 = (long long) split * kSplit;
@@ -318,6 +484,53 @@ fdec_kernel(const float* __restrict__ q, const void* __restrict__ kc, const uint
         uint4 ksc[2][2] = {};
         uint4 vx[4][4];
         uint16_t vsc[4][4] = {};
+        if constexpr (TQ) {
+            // a TurboQuant cache read as a q8 one: the indices become the centroids' codes, and a block's scale
+            // is its half's norm times the centroids' step (keys: blocks 0-3 the first half, 4-7 the second)
+            const uint8_t* kq = (const uint8_t*) kc;
+            const uint8_t* vq = (const uint8_t*) vc;
+            const float* kn = reinterpret_cast<const float*>(ks);
+            const float* vn = reinterpret_cast<const float*>(vs);
+#pragma unroll
+            for (int nt = 0; nt < 2; ++nt) {
+                const long long key = tb + 16 * w + 8 * nt + g8;
+                const uint8_t* kr = kq + ((size_t) key * kv_heads + grp) * kTurboKeyBytes;
+#pragma unroll
+                for (int b = 0; b < 8; ++b) {
+                    if (key > last) {
+                        kx[nt][b] = make_uint4(kZero, kZero, kZero, kZero);
+                    } else {
+                        const uint32_t u = *reinterpret_cast<const uint32_t*>(kr + 16 * b + 4 * t);
+                        kx[nt][b] = widen(make_uint2(tq_codes4(u, ci4, 0), tq_codes4(u, ci4, 16)));
+                    }
+                }
+#pragma unroll
+                for (int j = 0; j < 2; ++j) {
+                    const long long k2 = tb + 16 * w + 8 * nt + 2 * t + j;
+                    if (k2 <= last) {
+                        const float* nr = kn + ((size_t) k2 * kv_heads + grp) * 2;
+                        const uint32_t h0 = tq_scale2(nr[0] * kTqK4), h1 = tq_scale2(nr[1] * kTqK4);
+                        ksc[nt][j] = make_uint4(h0, h0, h1, h1);
+                    }
+                }
+            }
+            const int dv = 64 * w + 8 * g8;
+#pragma unroll
+            for (int kk = 0; kk < 4; ++kk)
+#pragma unroll
+                for (int i = 0; i < 4; ++i) {
+                    const long long key = tb + 16 * kk + 2 * t + (i & 1) + 8 * (i >> 1);
+                    if (key > last) {
+                        vx[kk][i] = make_uint4(kZero, kZero, kZero, kZero);
+                    } else {
+                        const size_t at = (size_t) key * kv_heads + grp;
+                        const uint8_t* vr = vq + at * kTurboValBytes;
+                        const uint32_t lo = *reinterpret_cast<const uint16_t*>(vr + dv / 4), hb = vr[64 + dv / 8];
+                        vx[kk][i] = widen(make_uint2(tq_codes3(lo, hb, ci3, 0), tq_codes3(lo, hb, ci3, 4)));
+                        vsc[kk][i] = __half_as_ushort(__float2half(vn[at * 2 + (w >> 1)] * kTqK3));
+                    }
+                }
+        } else {
 #pragma unroll
         for (int nt = 0; nt < 2; ++nt) {
             const long long key = tb + 16 * w + 8 * nt + g8;
@@ -342,6 +555,7 @@ fdec_kernel(const float* __restrict__ q, const void* __restrict__ kc, const uint
                                 : widen(*reinterpret_cast<const uint2*>(vg + key * width));
                 if (!F16 && key <= last) vsc[kk][i] = vsg[key * swidth];
             }
+        }
         // S = Q K^T, a 32-value block (two k-steps) at a time, then times the keys' scales of the block
         float s[MT][2][4];
 #pragma unroll
@@ -560,20 +774,44 @@ bool fattn_q8(const float* q, Kvq8 kq8, Kvq8 vq8, int64_t pos, int n, float* out
               float scale, float* scratch, size_t scratch_floats, void* stream) {
     return kq8.codes && vq8.codes &&
            (n_head == 16 * kv_heads
-                ? run<16>(q, kq8, vq8, nullptr, nullptr, pos, n, out, dim, n_head, kv_heads, scale, scratch,
-                          scratch_floats, stream)
-                : run<8>(q, kq8, vq8, nullptr, nullptr, pos, n, out, dim, n_head, kv_heads, scale, scratch,
-                         scratch_floats, stream));
+                ? run<16>(q, kq8, vq8, Kvtq{}, Kvtq{}, nullptr, nullptr, pos, n, out, dim, n_head, kv_heads, scale,
+                          scratch, scratch_floats, stream)
+                : run<8>(q, kq8, vq8, Kvtq{}, Kvtq{}, nullptr, nullptr, pos, n, out, dim, n_head, kv_heads, scale,
+                         scratch, scratch_floats, stream));
+}
+
+bool fattn_tq(const float* q, Kvtq k, Kvtq v, int64_t pos, int n, float* out, int dim, int n_head, int kv_heads,
+              float scale, float* scratch, size_t scratch_floats, void* stream) {
+    return k.codes && v.codes &&
+           (n_head == 16 * kv_heads
+                ? run<16>(q, Kvq8{}, Kvq8{}, k, v, nullptr, nullptr, pos, n, out, dim, n_head, kv_heads, scale,
+                          scratch, scratch_floats, stream)
+                : run<8>(q, Kvq8{}, Kvq8{}, k, v, nullptr, nullptr, pos, n, out, dim, n_head, kv_heads, scale,
+                         scratch, scratch_floats, stream));
+}
+
+void turbo_store(const float* k, const float* v, uint8_t* kq, float* kn, uint8_t* vq, float* vn, int kv_heads,
+                 int64_t pos, int n, const long long* at, void* stream) {
+    if (n <= 0) return;
+    turbo_store_kernel<<<dim3(kv_heads, n), kD, 0, (cudaStream_t) stream>>>(k, v, kq, kn, vq, vn, kv_heads,
+                                                                            (long long) pos, at);
+    ck("turbo store");
+}
+
+void turbo_rotate(float* x, int vectors, bool inverse, void* stream) {
+    if (vectors <= 0) return;
+    turbo_rotate_kernel<<<vectors, kD, 0, (cudaStream_t) stream>>>(x, inverse ? 1 : 0);
+    ck("turbo rotation");
 }
 
 bool fattn_f16(const float* q, const uint16_t* keys, const uint16_t* vals, int64_t pos, int n, float* out, int dim,
                int n_head, int kv_heads, float scale, float* scratch, size_t scratch_floats, void* stream) {
     return keys && vals &&
            (n_head == 16 * kv_heads
-                ? run<16>(q, Kvq8{}, Kvq8{}, (const half*) keys, (const half*) vals, pos, n, out, dim, n_head,
-                          kv_heads, scale, scratch, scratch_floats, stream)
-                : run<8>(q, Kvq8{}, Kvq8{}, (const half*) keys, (const half*) vals, pos, n, out, dim, n_head,
-                         kv_heads, scale, scratch, scratch_floats, stream));
+                ? run<16>(q, Kvq8{}, Kvq8{}, Kvtq{}, Kvtq{}, (const half*) keys, (const half*) vals, pos, n, out,
+                          dim, n_head, kv_heads, scale, scratch, scratch_floats, stream)
+                : run<8>(q, Kvq8{}, Kvq8{}, Kvtq{}, Kvtq{}, (const half*) keys, (const half*) vals, pos, n, out,
+                         dim, n_head, kv_heads, scale, scratch, scratch_floats, stream));
 }
 
 bool fdec_fits(int dim, int n_head, int kv_heads, int rows, size_t scratch_floats) {
@@ -584,7 +822,7 @@ bool fdec_fits(int dim, int n_head, int kv_heads, int rows, size_t scratch_float
 
 namespace {
 
-template <bool F16, int Group>
+template <bool F16, int Group, bool TQ = false>
 bool run_dec(const float* q, const void* kc, const uint16_t* ks, const void* vc, const uint16_t* vs, int64_t pos, int n,
              const long long* at, int room, float* out, int dim, int n_head, int kv_heads, float scale, float* scratch,
              size_t scratch_floats, void* stream) {
@@ -597,7 +835,7 @@ bool run_dec(const float* q, const void* kc, const uint16_t* ks, const void* vc,
     for (int first = 0; first < n; first += kDecTokens) {
         const int c = std::min(kDecTokens, n - first);
         const dim3 blocks(splits, kv_heads);
-        const auto kernel = c * Group <= 16 ? fdec_kernel<1, F16, Group> : fdec_kernel<2, F16, Group>;
+        const auto kernel = c * Group <= 16 ? fdec_kernel<1, F16, Group, TQ> : fdec_kernel<2, F16, Group, TQ>;
         kernel<<<blocks, kDecWarps * WARP_SIZE, 0, s>>>(q, kc, ks, vc, vs, (long long) pos, at, first, c, n_head, kv_heads,
                                                         scale, scratch, ml);
         fdec_merge_kernel<Group><<<dim3(n_head, c), kD, 0, s>>>(scratch, ml, out, (long long) pos, at, first, n_head,
@@ -617,6 +855,18 @@ bool fdec_q8(const float* q, Kvq8 kq8, Kvq8 vq8, int64_t pos, int n, const long 
                                      n_head, kv_heads, scale, scratch, scratch_floats, stream)
                 : run_dec<false, 8>(q, kq8.codes, kq8.scales, vq8.codes, vq8.scales, pos, n, at, room, out, dim,
                                     n_head, kv_heads, scale, scratch, scratch_floats, stream));
+}
+
+bool fdec_tq(const float* q, Kvtq k, Kvtq v, int64_t pos, int n, const long long* at, int room, float* out, int dim,
+             int n_head, int kv_heads, float scale, float* scratch, size_t scratch_floats, void* stream) {
+    const uint16_t* kn = reinterpret_cast<const uint16_t*>(k.norms);
+    const uint16_t* vn = reinterpret_cast<const uint16_t*>(v.norms);
+    return k.codes && v.codes && k.norms && v.norms &&
+           (n_head == 16 * kv_heads
+                ? run_dec<false, 16, true>(q, k.codes, kn, v.codes, vn, pos, n, at, room, out, dim, n_head, kv_heads,
+                                           scale, scratch, scratch_floats, stream)
+                : run_dec<false, 8, true>(q, k.codes, kn, v.codes, vn, pos, n, at, room, out, dim, n_head, kv_heads,
+                                          scale, scratch, scratch_floats, stream));
 }
 
 bool fdec_f16(const float* q, const uint16_t* keys, const uint16_t* vals, int64_t pos, int n, const long long* at,
@@ -648,6 +898,22 @@ bool fdec_f16(const float*, const uint16_t*, const uint16_t*, int64_t, int, cons
 bool fattn_q8(const float*, Kvq8, Kvq8, int64_t, int, float*, int, int, int, float, float*, size_t, void*) {
     return false;
 }
+
+bool fattn_tq(const float*, Kvtq, Kvtq, int64_t, int, float*, int, int, int, float, float*, size_t, void*) {
+    return false;
+}
+
+bool fdec_tq(const float*, Kvtq, Kvtq, int64_t, int, const long long*, int, float*, int, int, int, float, float*, size_t,
+             void*) {
+    return false;
+}
+
+void turbo_store(const float*, const float*, uint8_t*, float*, uint8_t*, float*, int, int64_t, int, const long long*,
+                 void*) {
+    throw std::runtime_error("--kv turbo needs a CUDA build");
+}
+
+void turbo_rotate(float*, int, bool, void*) { throw std::runtime_error("--kv turbo needs a CUDA build"); }
 
 bool fattn_f16(const float*, const uint16_t*, const uint16_t*, int64_t, int, float*, int, int, int, float, float*,
                size_t, void*) {

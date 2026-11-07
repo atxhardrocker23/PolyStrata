@@ -1081,7 +1081,10 @@ void usage() {
                  "                         the conversation grows, the expert cache having the rest until then)\n"
                  "  --kv fmt               the K and V attention caches' format, opt-in: fp16 (default,\n"
                  "                         unchanged); q8_0 (ggml Q8_0 blocks: half the KV VRAM, slightly\n"
-                 "                         different answers; qwen35moe's and kolibri1's); int8 / int8k (Gemma 4's:\n"
+                 "                         different answers; qwen35moe's and kolibri1's); turbo (TurboQuant:\n"
+                 "                         K 4-bit, V 3-bit after a Hadamard rotation, 480 bytes a token and layer\n"
+                 "                         instead of fp16's 2,048 for Qwen3.6; qwen35moe's, Ampere or later; the\n"
+                 "                         VRAM it leaves stays with the expert cache); int8 / int8k (Gemma 4's:\n"
                  "                         the same Q8_0 rule with the codes and their deltas in two arrays, so a\n"
                  "                         reader takes four codes to a load; int8k keeps the keys' side\n"
                  "                         quantized and the values' in fp16)\n"
@@ -1197,8 +1200,9 @@ int main(int argc, char** argv) {
             else if (fmt == "q8_0") o.kv_format = KvFmt::kQ8_0;
             else if (fmt == "int8") o.kv_format = KvFmt::kInt8;
             else if (fmt == "int8k") o.kv_format = KvFmt::kInt8K;
+            else if (fmt == "turbo") o.kv_format = KvFmt::kTurbo;
             else {
-                std::fprintf(stderr, "strata-poly: --kv %s: unknown format (use fp16, q8_0, int8 or int8k)\n",
+                std::fprintf(stderr, "strata-poly: --kv %s: unknown format (use fp16, q8_0, turbo, int8 or int8k)\n",
                              fmt.c_str());
                 std::exit(2);
             }

@@ -42,6 +42,7 @@
 #include "strata/kernels/cpu/pool.hpp"
 #include "strata/platform/aux_cpus.hpp"
 #include "strata/kernels/cpu/expert_layout.hpp"
+#include "strata/kernels/cpu/hadamard.hpp"
 #include "strata/kernels/ngram.hpp"
 #include "strata/kernels/iq_kernels.hpp"
 #include "strata/kernels/s2_expert_grouped.hpp"
@@ -3254,6 +3255,28 @@ int main(int argc, char** argv) {
             (void) strata::prefill::mmq::supported(f.d_type);
 #endif
         }
+        // APR (prism.hadamard) packs: every expert path rotates its activations (CPU pool: native_quant_act / _h;
+        // GPU verify, remote GPUs, prompt FP16 path: hadamard_rows).  Validated end to end on CUDA (sm_86, sm_89 with
+        // a two-GPU layer split and peer decode, sm_120) and on HIP gfx1151.  Other HIP architectures run the same
+        // kernels but have not been run end to end with such a pack: said here, not refused (the P2P prompt peer
+        // says the same in Prefill::set_peer).  The former opt-in STRATA_APR is no longer read.
+        if (strata::kernels::cpu::hadamard_spec().any()) {
+            std::fprintf(stderr, "strata generate: APR pack: Hadamard-folded experts (block %d)\n",
+                         strata::kernels::cpu::hadamard_spec().block);
+#if defined(STRATA_USE_HIP) || defined(STRATA_HIP_GFX906)
+            int dev = 0;
+            cudaDeviceProp p{};
+            if (cudaGetDevice(&dev) == cudaSuccess && cudaGetDeviceProperties(&p, dev) == cudaSuccess) {
+                std::string arch(p.gcnArchName);
+                if (const size_t colon = arch.find(':'); colon != std::string::npos) arch.resize(colon);
+                if (arch != "gfx1151")
+                    std::fprintf(stderr, "strata generate: warning: Hadamard-folded experts are validated end to end "
+                                         "on gfx1151 among AMD GPUs, not yet on %s\n", arch.c_str());
+            } else {
+                (void) cudaGetLastError();
+            }
+#endif
+        }
     }
     const bool native_pack = strata::kernels::cpu::expert_layout().native;
     // STRATA_MMQ_DIRECT: the room each sized expert slot keeps after its blob (0 unless it is on: the slot costs and
@@ -5186,8 +5209,22 @@ int main(int argc, char** argv) {
     // In particular WDDM can refuse the draft weights after mapping tens of GiB of host pages.
     strata::core::MtpDrafter mtp;
     // the draft layer's geometry (the canonical model's MTP head), `static` because MtpDrafter keeps a reference; the batch
-    // slots' draft-KV copies use this one too
-    static const strata::core::ModelGeometry draft_geometry{};
+    // slots' draft-KV copies use this one too.  A head with fewer routed experts than the canonical 512 (Groot-65B-A6B's
+    // own MTP: 256, tools/mtp_rt_gguf.py) is told by its experts.bin, one blob per expert; a 512-expert file (the canonical
+    // head, also what a pruned target such as GSQ-RCO Coder drafts with) keeps the canonical geometry unchanged.
+    static const strata::core::ModelGeometry draft_geometry = [&] {
+        strata::core::ModelGeometry g{};
+        if (o.mtp.empty()) return g;
+        std::error_code ec;
+        const uint64_t bytes = (uint64_t) std::filesystem::file_size(std::filesystem::path(o.mtp) / "experts.bin", ec);
+        const uint64_t blob = strata::kernels::cpu::BLOB;
+        if (!ec && bytes > 0 && bytes % blob == 0 && bytes / blob != (uint64_t) g.n_expert) {
+            g.n_expert = (int64_t) (bytes / blob);
+            std::fprintf(stderr, "strata generate: the MTP draft layer has %lld routed experts (%s/experts.bin)\n",
+                         (long long) g.n_expert, o.mtp.c_str());
+        }
+        return g;
+    }();
     std::vector<std::unique_ptr<strata::core::MtpDrafter>> slot_mtp;
     if (!o.mtp.empty()) {
         if (o.spec < 2) {
