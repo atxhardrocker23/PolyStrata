@@ -12,7 +12,6 @@ if (host) {
   sync();
   new MutationObserver(sync).observe(host, {attributes: true, attributeFilter: ["data-theme"]});
 }
-document.documentElement.dataset.theme = localStorage.getItem("strata.theme") || "dark";
 const seconds = n => typeof n === "number" ? `${n.toFixed(2)} s` : "—";
 const speed = n => typeof n === "number" ? n.toFixed(1) : "—";
 const active = r => !["completed", "error", "disconnected"].includes(r.state);

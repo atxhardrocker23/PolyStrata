@@ -179,11 +179,14 @@ main { flex: 1; min-height: 0; display: flex; }
   .cfg-form { grid-template-columns: 1fr; gap: 4px; }
   .cfg-form .st-input { margin-bottom: var(--st-s-2); }
 }
+@media (max-width: 760px) {
+  .st-tab .st-icon { display: none; }
+}
 @media (max-width: 640px) {
   .st-header { padding: 0 var(--st-s-3); gap: var(--st-s-2); }
-  .st-header .st-tabs { margin-left: 0; }
-  .st-tab { padding: 0 10px; }
-  .st-tab .st-icon { display: none; }
+  .st-header__brand { display: none; }
+  .st-header .st-tabs { margin-left: 0; gap: 2px; }
+  .st-tab { padding: 0 8px; }
   #pill-text { display: none; }
   .chat { padding: var(--st-s-5) var(--st-s-4); }
   .composer-wrap { padding: 0 var(--st-s-3) var(--st-s-3); }
