@@ -1081,7 +1081,7 @@ void usage() {
                  "                         the conversation grows, the expert cache having the rest until then)\n"
                  "  --kv fmt               the K and V attention caches' format, opt-in: fp16 (default,\n"
                  "                         unchanged); q8_0 (ggml Q8_0 blocks: half the KV VRAM, slightly\n"
-                 "                         different answers; qwen35moe's and kolibri1's); turbo (TurboQuant:\n"
+                 "                         different answers; qwen35moe's, kolibri1's, flint's and lfm2moe's); turbo (TurboQuant:\n"
                  "                         K 4-bit, V 3-bit after a Hadamard rotation, 480 bytes a token and layer\n"
                  "                         instead of fp16's 2,048 for Qwen3.6; qwen35moe's, Ampere or later; the\n"
                  "                         VRAM it leaves stays with the expert cache); int8 / int8k (Gemma 4's:\n"
