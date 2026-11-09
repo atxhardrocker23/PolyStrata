@@ -401,10 +401,11 @@ struct Session {
         if (s.seed != 0) rng.seed(s.seed);
 
         // The last token goes in alone, for the logits that come with it.  The tokens before it go in as many at
-        // a time as the engine takes.  A prompt without pictures goes in several calls' worth at once, which the
-        // engine reads faster than the calls (read()), and the checkpoints due inside are the engine's to write.
-        // One with pictures goes in a call at a time up to the next checkpoint, a picture whole.
-        const bool text = pictures.at.empty();
+        // a time as the engine takes.  A stretch of prompt without pictures goes in several calls' worth at once,
+        // which the engine reads faster than the calls (read()), and the checkpoints due inside are the engine's
+        // to write.  A stretch with a picture in it goes in eval() calls, a picture whole, up to the checkpoint;
+        // the text before and after that picture is read like a prompt without pictures.
+        const bool pictures_any = !pictures.at.empty();
         std::vector<std::pair<int64_t, uint8_t*>> due;
         std::vector<Engine::Mark> marks;
         for (int64_t i = r.resume; i < n;) {
@@ -414,7 +415,19 @@ struct Session {
             }
             const bool last = i == n - 1;
             const int64_t most = between ? (int64_t) piece_calls * engine.max_rows() : INT64_MAX;
-            const int64_t room = std::min<int64_t>({n - 1 - i, text ? engine.max_read() : engine.max_rows(), most});
+            // How far the text from i runs: to the next picture's first row, or to the last token, which goes in
+            // alone.  read() takes no row of a picture, so only a run of text can go through it.  A run shorter
+            // than a call keeps to eval(): its pieces are the calls it would take anyway.
+            int64_t picture_at = n;
+            bool in_picture = false;
+            for (const auto& im : pictures.at) {
+                if (i >= im.at && i < im.at + im.n) in_picture = true;
+                else if (im.at > i && im.at < picture_at) picture_at = im.at;
+            }
+            const int64_t text_run = in_picture ? 0 : std::min<int64_t>(picture_at, n - 1) - i;
+            const bool text = !pictures_any || text_run >= engine.max_rows();
+            const int64_t room = std::min<int64_t>({text ? text_run : n - 1 - i,
+                                                    text ? engine.max_read() : engine.max_rows(), most});
             const int64_t m = last ? 1 : text ? room : engine.whole(i, kept.until_checkpoint(i, room));
             kept.before(i, last);
             if (text && !last) {
