@@ -2,6 +2,8 @@
 // llama.cpp's qwen35moe graph.
 #include "qwen35.hpp"
 
+#include "q35_scratch_arena.hpp"
+
 #include "fattn.hpp"
 
 #include "runtime.hpp"
@@ -223,25 +225,58 @@ void Qwen35::alloc_caches() {
 // Per-token buffers hold rows_ tokens, row after row.
 void Qwen35::assign_scratch() {
     const size_t n = (size_t) rows_, heads = n * n_head_ * head_dim_, kv = n * n_kv_ * head_dim_;
-    proj_ = fbuf(n * conv_dim_);
-    qkv_ = fbuf(n * conv_dim_);
-    z_ = fbuf(n * d_inner_);
-    alpha_ = fbuf(n * v_heads_);
-    beta_ = fbuf(n * v_heads_);
-    gated_ = fbuf(n * d_inner_);
+    // Recurrent and full-attention layers consume these temporary families in
+    // separate phases on the same compute stream. Keep members within a family
+    // disjoint, and keep score_/q8w_/persistent state outside this arena.
+    // Metal retains its existing balanced allocation policy.
+#if defined(STRATA_GPU_METAL)
+    constexpr bool scratch_alias = false;
+#else
+    constexpr bool scratch_alias = true;
+#endif
+    if (scratch_alias) {
+        const std::array<size_t, 6> recurrent = {
+            n * conv_dim_, n * conv_dim_, n * d_inner_, n * v_heads_, n * v_heads_, n * d_inner_};
+        const std::array<size_t, 7> attention = {
+            2 * heads, heads, kv, kv, kv, heads,
+            rows_ >= kStageRows ? heads + heads / 2 + 1 + 3 * n * n_head_ : 0};
+        const auto layout = poly_scratch::plan(recurrent, attention);
+        float* arena = fbuf(layout.total);
+        auto at = [&](size_t offset) { return arena != nullptr ? arena + offset : nullptr; };
+        proj_ = at(layout.a[0]);
+        qkv_ = at(layout.a[1]);
+        z_ = at(layout.a[2]);
+        alpha_ = at(layout.a[3]);
+        beta_ = at(layout.a[4]);
+        gated_ = at(layout.a[5]);
+        qg_ = at(layout.b[0]);
+        q_ = at(layout.b[1]);
+        kraw_ = at(layout.b[2]);
+        k_ = at(layout.b[3]);
+        v_ = at(layout.b[4]);
+        att_ = at(layout.b[5]);
+        if (rows_ >= kStageRows) awork_ = at(layout.b[6]);
+    } else {
+        proj_ = fbuf(n * conv_dim_);
+        qkv_ = fbuf(n * conv_dim_);
+        z_ = fbuf(n * d_inner_);
+        alpha_ = fbuf(n * v_heads_);
+        beta_ = fbuf(n * v_heads_);
+        gated_ = fbuf(n * d_inner_);
 
-    qg_ = fbuf(2 * heads);
-    q_ = fbuf(heads);
-    kraw_ = fbuf(kv);
-    k_ = fbuf(kv);
-    v_ = fbuf(kv);
-    att_ = fbuf(heads);
+        qg_ = fbuf(2 * heads);
+        q_ = fbuf(heads);
+        kraw_ = fbuf(kv);
+        k_ = fbuf(kv);
+        v_ = fbuf(kv);
+        att_ = fbuf(heads);
+    }
 #if defined(STRATA_GPU_METAL)
     if (!opt_.metal_balanced)
 #endif
     {
         score_ = fbuf(score_floats_);
-        if (rows_ >= kStageRows) awork_ = fbuf(heads + heads / 2 + 1 + 3 * n * n_head_);   // a prompt batch's attention
+        if (!scratch_alias && rows_ >= kStageRows) awork_ = fbuf(heads + heads / 2 + 1 + 3 * n * n_head_);   // a prompt batch's attention
         if (rows_ >= kStageRows && opt_.kv_format == KvFmt::kQ8_0) {
             // the K and V blocks a q8 prompt batch dequantizes, side by side; work_halves_ halves each
             work_halves_ = kQ8WorkRows * (size_t) n_kv_ * head_dim_;
