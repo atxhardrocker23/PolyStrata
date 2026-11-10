@@ -637,40 +637,74 @@ int serve(Session& ss) {
     // A token for every slot that writes: BT <slot> <token> each, and BDONE <slot> <produced> <finish> <ms> for a
     // slot that ends with it.  False when the engine failed, which leaves it in no known state.
     Sampler slot_sampler;
-    std::vector<int> seqs;
-    std::vector<int32_t> feed;
+    std::vector<int> seqs, kept;
+    std::vector<int32_t> feed, guess;
     std::vector<size_t> which;
     const auto step = [&] {
         seqs.clear();
         feed.clear();
         which.clear();
+        guess.clear();
         for (size_t b = 0; b < slots.size(); ++b)
             if (slots[b].active) {
                 seqs.push_back((int) b + 1);
                 feed.push_back(slots[b].next);
                 which.push_back(b);
             }
+        // --batch-mtp: each slot's draft block guesses the token after its next one, and the step checks it
+        const bool guessing = engine.steps_guesses();
         try {
-            engine.step(seqs.data(), feed.data(), (int) seqs.size());
+            if (guessing) {
+                guess.resize(seqs.size());
+                engine.draft_many(seqs.data(), feed.data(), (int) seqs.size(), guess.data());
+                engine.step(seqs.data(), feed.data(), (int) seqs.size(), guess.data());
+            } else {
+                engine.step(seqs.data(), feed.data(), (int) seqs.size());
+            }
         } catch (const std::exception& e) {
             std::fprintf(stderr, "strata-poly: batch: %s\n", e.what());
             std::printf("ERR %s\n", e.what());
             std::fflush(stdout);
             return false;
         }
-        for (size_t i = 0; i < which.size(); ++i) {
+        kept.assign(which.size(), 1);
+        for (size_t i = 0, row = 0; i < which.size(); ++i) {
             Slot& sl = slots[which[i]];
             sl.held.push_back(feed[i]);
-            const int32_t t = (int32_t) slot_sampler.pick(engine.logits_of((int) i), engine.n_vocab(), sl.s, sl.held, sl.rng);
-            ++sl.produced;
-            std::printf("BT %zu %d\n", which[i], (int) t);
-            const char* fin = ss.is_eos(t) ? "stop" : sl.stop ? "cancel" : sl.produced >= sl.max_new ? "length"
-                            : (long long) sl.held.size() + 2 > engine.max_context() ? "length" : nullptr;
-            if (fin) {
-                std::printf("BDONE %zu %lld %s %.1f\n", which[i], sl.produced, fin, ms_since(sl.t0));
-                sl.active = false;
+            // a token for the slot: false when its answer ends with it
+            const auto emit = [&](int32_t t) {
+                ++sl.produced;
+                std::printf("BT %zu %d\n", which[i], (int) t);
+                const char* fin = ss.is_eos(t) ? "stop" : sl.stop ? "cancel" : sl.produced >= sl.max_new ? "length"
+                                : (long long) sl.held.size() + 2 > engine.max_context() ? "length" : nullptr;
+                if (fin) {
+                    std::printf("BDONE %zu %lld %s %.1f\n", which[i], sl.produced, fin, ms_since(sl.t0));
+                    sl.active = false;
+                }
+                return fin == nullptr;
+            };
+            const bool guessed = guessing && guess[i] >= 0;
+            int32_t t = (int32_t) slot_sampler.pick(engine.logits_of((int) row), engine.n_vocab(), sl.s, sl.held, sl.rng);
+            // a guess that is what was picked has been through the model already, so the token after it is picked
+            // too; the token an answer ends with is shown and never fed, as without guesses
+            if (emit(t) && guessed && t == guess[i]) {
+                sl.held.push_back(t);
+                kept[i] = 2;
+                t = (int32_t) slot_sampler.pick(engine.logits_of((int) row + 1), engine.n_vocab(), sl.s, sl.held, sl.rng);
+                emit(t);
             }
             sl.next = t;
+            row += guessed ? 2 : 1;
+        }
+        if (guessing) {
+            try {
+                engine.keep_step(kept.data());
+            } catch (const std::exception& e) {
+                std::fprintf(stderr, "strata-poly: batch: %s\n", e.what());
+                std::printf("ERR %s\n", e.what());
+                std::fflush(stdout);
+                return false;
+            }
         }
         std::fflush(stdout);
         return true;
@@ -1039,13 +1073,56 @@ int check_batch(Engine& engine, const std::vector<int32_t>& ids, int k, long lon
     engine.bind(0);
     const double read_ms = ms_since(t0);
     const Clock::time_point t1 = Clock::now();
-    for (long long n = 0; n < max_new; ++n) {
-        for (int j = 0; j < k; ++j) got[(size_t) j].push_back(next[(size_t) j]);
-        engine.step(seqs.data(), next.data(), k);
+    // --batch-mtp: each sequence guesses the token after its next one, a step checks the guesses, and a sequence
+    // that has its max_new tokens leaves the steps
+    const bool guessing = engine.steps_guesses();
+    long long steps = 0, offered = 0, right = 0;
+    std::vector<int> live, kept;
+    std::vector<int32_t> feed, guess;
+    while (true) {
+        live.clear();
+        feed.clear();
+        guess.clear();
         for (int j = 0; j < k; ++j)
-            next[(size_t) j] = (int32_t) strata::poly::most_likely(engine.logits_of(j), engine.n_vocab());
+            if ((long long) got[(size_t) j].size() < max_new) {
+                got[(size_t) j].push_back(next[(size_t) j]);
+                live.push_back(j + 1);
+                feed.push_back(next[(size_t) j]);
+            }
+        if (live.empty()) break;
+        if (guessing) {
+            guess.resize(live.size());
+            engine.draft_many(live.data(), feed.data(), (int) live.size(), guess.data());
+            for (size_t i = 0; i < live.size(); ++i) {
+                if ((long long) got[(size_t) live[i] - 1].size() >= max_new) guess[i] = -1;   // no token wanted after
+                offered += guess[i] >= 0;
+            }
+            engine.step(live.data(), feed.data(), (int) live.size(), guess.data());
+        } else {
+            engine.step(live.data(), feed.data(), (int) live.size());
+        }
+        ++steps;
+        kept.assign(live.size(), 1);
+        for (size_t i = 0, row = 0; i < live.size(); ++i) {
+            const size_t j = (size_t) live[i] - 1;
+            int32_t t = (int32_t) strata::poly::most_likely(engine.logits_of((int) row), engine.n_vocab());
+            const bool guessed = guessing && guess[i] >= 0;
+            if (guessed && t == guess[i]) {
+                got[j].push_back(t);
+                kept[i] = 2;
+                ++right;
+                t = (int32_t) strata::poly::most_likely(engine.logits_of((int) row + 1), engine.n_vocab());
+            }
+            next[j] = t;
+            row += guessed ? 2 : 1;
+        }
+        if (guessing) engine.keep_step(kept.data());
     }
+    for (int j = 0; j < k; ++j) got[(size_t) j].resize((size_t) max_new);
     const double step_ms = ms_since(t1);
+    if (guessing)
+        std::fprintf(stderr, "check-batch: --batch-mtp: %lld steps, %lld of %lld guesses right\n", steps, right,
+                     offered);
     int rc = 0;
     for (int j = 0; j < k; ++j) {
         size_t same = 0;
@@ -1061,14 +1138,23 @@ int check_batch(Engine& engine, const std::vector<int32_t>& ids, int k, long lon
 }
 
 void usage() {
+#if defined(STRATA_GPU_METAL)
+    std::fprintf(stderr, "Metal defaults: optimized expert overlap and compact MMQ (disable: --no-metal-optimize), "
+                         "--metal-memory legacy|balanced (default balanced)\n");
+#endif
     std::fprintf(stderr,
                  "usage: strata-poly --model FILE.gguf (--serve | --tokens ID,ID,... [--max-new N])\n"
                  "  --max-context N        tokens the attention caches hold (default 8192)\n"
-                 "  --threads N            CPU threads for the experts that are not in VRAM (default: all usable)\n"
+                 "  --threads N            CPU threads for the experts that are not in VRAM (default: 70%% of the usable\n"
+                 "                         CPUs; all of them in a container with a CPU quota)\n"
                  "  --vram-reserve-mib N   VRAM left free beside the expert cache, 256 at least (default: a\n"
                  "                         thirty-second of the card, 256 to 768, or a sixteenth, 512 to 1024,\n"
                  "                         when the PC's free RAM is within 4 GiB of the model's files, and then\n"
                  "                         kept whole; else half of it after the first request)\n"
+                 "  --vram-pool            claim the card's VRAM once at load (what is free but for the reserve above,\n"
+                 "                         which is then the margin left outside), keep it for the whole run and move\n"
+                 "                         it between the expert cache and the attention caches as the context grows\n"
+                 "                         and shrinks, in 2 MiB pieces; nothing is given back to the card (needs VMM)\n"
                  "  --layer-split S        the model's layers across the CUDA devices this process sees, in their\n"
                  "                         order: S is auto (by each card's free VRAM) or the first layer of each\n"
                  "                         later card, as 20 or 20,30 (default: the first card alone)\n"
@@ -1101,12 +1187,18 @@ void usage() {
                  "                         the same Q8_0 rule with the codes and their deltas in two arrays, so a\n"
                  "                         reader takes four codes to a load; int8k keeps the keys' side\n"
                  "                         quantized and the values' in fp16)\n"
+#if defined(STRATA_GPU_METAL)
+                 "                         Metal default: q8_0 for a compatible Qwen35MoE geometry, else fp16\n"
+#endif
                  "  --expert-swaps N       while an answer is written, up to N experts it keeps using are on their way\n"
                  "                         into VRAM, in place of cached ones it uses less (default 64, 0 = the cache\n"
                  "                         stays as it was loaded)\n"
                  "  --ram-experts-mib N    hold N MiB of RAM for the experts outside VRAM, during answers too: the ones\n"
                  "                         used most lately; the rest stay in the file cache for other programs to take,\n"
-                 "                         and are read back when a token needs them (default: all of them)\n"
+                 "                         and are read back when a token needs them (default: all of them when they\n"
+                 "                         fit in the RAM that is free, else what is free less 4 GiB; -1: all of them)\n"
+                 "  --lock-experts         lock the experts outside VRAM in RAM, so the system cannot drop them from the\n"
+                 "                         file cache when other programs want the memory (Linux: up to ulimit -l)\n"
                  "  --prompt-batch N       prompt tokens read at a time (default 1024); about 1.4 MiB of VRAM each\n"
                  "  --stage-mib N          VRAM the experts outside the cache pass through in a prompt batch (default\n"
                  "                         128 on an NVIDIA card where a longer read widens it, else 2048; never more\n"
@@ -1133,6 +1225,9 @@ void usage() {
                  "  --batch N              N answers written together, each in a sequence of its own with its own\n"
                  "                         state and attention rows (default 0 = one at a time; at most 8);\n"
                  "                         --slots N is the same\n"
+                 "  --batch-mtp            with --batch and a draft block: each answer written together guesses its\n"
+                 "                         next token and the step checks it, a guess right gives two tokens\n"
+                 "                         (Qwen3.6's family; STRATA_BATCH_MTP=1 does the same)\n"
                  "  --check-batch K        with --tokens and --batch K or more: K prompts answered on their own and\n"
                  "                         then together, compared token by token (takes --kv-whole, so the expert\n"
                  "                         cache stays as it is)\n"
@@ -1199,12 +1294,26 @@ int main(int argc, char** argv) {
         };
         if (a == "--model") o.model = val();
         else if (a == "--serve") want_serve = true;
+#if defined(STRATA_GPU_METAL)
+        else if (a == "--metal-optimize") o.metal_optimize = true;
+        else if (a == "--no-metal-optimize") o.metal_optimize = false;
+        else if (a == "--metal-memory") {
+            const std::string policy = val();
+            if (policy != "legacy" && policy != "balanced") {
+                std::fprintf(stderr, "strata-poly: --metal-memory requires legacy or balanced\n");
+                return 2;
+            }
+            o.metal_balanced = policy == "balanced";
+        }
+#endif
         else if (a == "--max-context") o.max_context = std::atoi(val());
         else if (a == "--threads") o.threads = std::atoi(val());
         else if (a == "--vram-reserve-mib") o.vram_reserve_mib = std::atoi(val());
+        else if (a == "--vram-pool") o.vram_pool = true;
         else if (a == "--expert-profile") o.profile = val();
         else if (a == "--no-gpu-experts") o.gpu_experts = false;
         else if (a == "--any-node") o.stay_near = false;
+        else if (a == "--lock-experts") o.lock_experts = true;
         else if (a == "--no-graphs") o.graphs = false;
         else if (a == "--kv-whole") o.kv_grow = false;
         else if (a == "--kv") {
@@ -1232,6 +1341,7 @@ int main(int argc, char** argv) {
         else if (a == "--cache-bias-outer") o.cache_bias_outer = (float) std::atof(val());
         else if (a == "--layer-split") o.layer_split = val();
         else if (a == "--batch" || a == "--slots") o.batch = std::atoi(val());
+        else if (a == "--batch-mtp") o.batch_mtp = true;
         else if (a == "--check-batch") check = std::atoi(val());
         else if (a == "--draft-vocab") o.draft_vocab = std::atoi(val());
         else if (a == "--prompt-batch") o.prompt_batch = std::atoi(val());
@@ -1279,6 +1389,7 @@ int main(int argc, char** argv) {
                              "with tokens left of --tokens\n");
         return 2;
     }
+    if (const char* v = std::getenv("STRATA_BATCH_MTP"); v && std::string(v) == "1") o.batch_mtp = true;
     // --check-batch: K sequences growing together would take VRAM from the expert cache that the single runs had,
     // and an expert moved to the CPU rounds differently (issue 55).  Their attention rows get VRAM at load instead.
     if (check > 0) o.kv_grow = false;

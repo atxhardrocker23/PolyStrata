@@ -184,6 +184,28 @@ One harness note: with `--max-tokens 256` the q8_0 arm spent the whole cap in th
 answer (the needle script then counts a miss); at 1024 it closed thinking at 94 tokens and answered at 115-116.
 The same prompt answered at 131 tokens on the laptop with a 512 cap. That is the model's thinking, not the cache.
 
+### Flint on a fast card (RTX PRO 6000)
+
+On a faster card the long prompt costs more. `Flint.APEX-I-NanoPlus-V2.1.gguf`, an RTX PRO 6000 Blackwell held
+to 8 GB of free VRAM (`--vram-reserve-mib`), Linux, CUDA 12.8, 22 CPU threads on one NUMA node,
+`--max-context 32768 --prompt-batch 2048`, the experts frozen (`STRATA_FREEZE_EXPERTS=1`, `--expert-swaps 0
+--cpu-share 0 --tail-skip 0 --window 1`), greedy 256-token answers, two runs of each arm (first / second):
+
+| prompt | arm | prefill tok/s | decode tok/s |
+| --- | --- | ---: | ---: |
+| 28,887 tokens | fp16 | 9,062 / 8,468 | 115.3 / 110.7 |
+| 28,887 tokens | q8_0 | 6,293 / 6,415 | 68.7 / 69.1 |
+| 12-token chat, after the long one | fp16 | | 117.5 / 117.8 |
+| 12-token chat, after the long one | q8_0 | | 115.2 / 113.2 |
+
+At 28.9K of context q8_0 reads the prompt 24-31% slower and writes 38-40% slower; a short chat is 2-4% slower.
+The expert cache held 5,483 experts under q8_0 against 5,401 under fp16. Neither arm runs the tensor-core decode
+kernel (`STRATA_FDEC` prints nothing for Flint), so both decode through `attend()`, and q8_0's readers dequantize
+the rows as they read them. Probably the laptop and the RX 7900 XT above spend most of a step on the experts, so
+the readers' cost hides there, while on this card the experts are fast and the attention at 28.9K is a larger
+part of a step; the step was not timed part by part. The greedy answers left fp16's at token 27 to 61, and the
+text read fine.
+
 ### LFM2.5-24B-A2B on an RX 7900 XT (HIP)
 
 `LFM2.5-24B-A2B-Uncensored-AD-Q4_K_M.gguf` (Q4_K_M, 15.4 GB), the same card, machine and ROCm 10.1 as the Flint
