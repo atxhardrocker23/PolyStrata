@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import io
+import json
 import os
 import sys
 import tempfile
@@ -174,6 +175,43 @@ class MockedInstall(unittest.TestCase):
                                       extra=[mock.patch.object(setup, "amd_gpus", lambda *a, **k: amd)])
         self.assertNotEqual(code, 0)
         self.assertIn("UD-IQ4_XS", out)
+
+    def test_rebuild_from_older_prebuilt_keeps_the_portable_choice(self):
+        """--max-compatibility: the NVFP4 fallback in main() compiles portable, as the flag or BUILD.json says."""
+        import test_setup_golden as G
+        ram, found = G.PROFILES["128GB-1x24GB"]
+        cases = [(True, [], True), (False, ["--max-compatibility"], True), (False, [], False)]
+        for meta_portable, flags, want_portable in cases:
+            with self.subTest(meta_portable=meta_portable, flags=flags):
+                meta_in = {"version": "0.1.32", "source": "release", "cuda_dirs": ["<cuda>"],
+                           **({"portable": True} if meta_portable else {})}
+                built = []
+                code, out, cfg, _ = self.install_with_meta(
+                    G, ram, found, meta_in, built,
+                    ["--family", "nvfp4", "--no-start", *flags])
+                self.assertEqual(code, 0, out[-2000:])
+                self.assertIn("has no NVFP4 experts yet: compiling the engine from this source", out)
+                self.assertEqual(len(built), 1)
+                self.assertEqual(built[0]["portable"], want_portable)
+
+    def install_with_meta(self, G, ram, found, meta_in, built, argv):
+        with tempfile.TemporaryDirectory() as d:
+            eng = Path(d) / "engine"
+            eng.mkdir()
+            (eng / "BUILD.json").write_text(json.dumps(meta_in))
+            (eng / setup.EXE).write_bytes(b"engine")
+
+            def fake_build(gpu, vision, yes, llama, toolkit=None, portable=False):
+                built.append({"gpu": gpu, "portable": portable, "toolkit": toolkit})
+                (eng / "BUILD.json").write_text(json.dumps({"version": "0.1.33", "source": "local",
+                                                            "portable": portable, "cuda_dirs": ["<cuda>"]}))
+                return eng
+
+            return G.install(ram, found, argv, extra=[
+                mock.patch.object(setup, "WIN", True),
+                mock.patch.object(setup, "get_prebuilt", lambda *a, **k: eng),
+                mock.patch.object(setup, "build_engine", fake_build),
+            ])
 
 
 if __name__ == "__main__":

@@ -101,6 +101,20 @@ family's architecture (`qwen35moe` for Qwen3.6, Ornith 1.5 and Tiel Coder, `gemm
 not the file it offers, and uses it as it is; it never deletes a file in that folder. Its RAM and VRAM estimates
 are those of the size whose name the file took.
 
+### How do I remove a model?
+
+There is no command for it. A model's files are these, where `<model>` is the name in its run config's file name
+(`qwen36-ud-q3_k_m` for `strata-qwen36-ud-q3_k_m.json`):
+
+- its folder in `models/` (the same name, in capitals where the file has them): the GGUF, and `mmproj` for pictures
+- `packs/<model>/`: its tokenizer and expert profile
+- `strata-<model>.json` and `strata-<model>.json.bak`: its run config
+- `strata-<model>.log`
+- `run-<model>.bat` or `run-<model>.sh`
+
+`models/` and `packs/` are in the PolyStrata folder unless setup was given another data folder. The engines
+(`engine-poly/`, `engine/`) are shared by every model: keep them.
+
 ### Can I use any GLM 5.3 Flash GGUF?
 
 The installer offers three files, and those are the ones that were run: neuralll's 3.0bit (114 GB), Unsloth's

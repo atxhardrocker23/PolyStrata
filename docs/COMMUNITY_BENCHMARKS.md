@@ -74,6 +74,11 @@ It includes 28 official suites, frozen expert-profile seeds, exact native HIP bu
 agent-request failures. The earlier report stays intact; the new limits compare available capacity on the upgraded
 machine rather than recreating its old physical RAM.
 
+The same RX 6700 XT on [v0.1.45-poly.9](../bench/results/2026-11-10-community-rx6700xt-poly9/README.md), the HIP engine
+built for gfx1031: Qwen3.6 UD-Q3_K_M, UD-Q4_K_M and UD-Q4_K_XL, Gemma 4 UD-Q4_K_M and Tiel Coder UD-Q3_K_XL at 64K
+configured context, the official suite with 36 requests each and no failures. Chats wrote 72 to 90 tokens/s, and
+prompts near 32K read at 819 to 859.
+
 The official suite on a [GTX 1650 4 GB with Clover APEX-I-NanoPlus](../bench/results/2026-10-30-community-gtx-1650-clover-35b-a3b-preview-apex-i-nanoplus/README.md)
 and [with MiniCPM-V mix_q3gud_im](../bench/results/2026-10-30-community-gtx-1650-minicpm-v-4-7-35b-a3b-mix-q3gud-im/README.md),
 and on an [RTX 3080 10 GB with Tiel Coder UD-Q4_K_XL](../bench/results/2026-10-30-community-rtx-3080-tiel-coder-35b-a3b-ud-q4-k-xl/README.md),

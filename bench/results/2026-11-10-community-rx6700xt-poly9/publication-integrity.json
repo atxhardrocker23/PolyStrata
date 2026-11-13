@@ -1,0 +1,176 @@
+{
+  "policy": "Original owner evidence retained privately. Public copies redact installation/user paths, container labels and credential fields. Quick results subtrees, standard requests and every numeric/non-string field were compared for equality. Standard artifact hashes are recomputed after redaction. Published placeholders require local path substitution.",
+  "files": {
+    "qwen36-ud-q3_k_m": {
+      "2026-11-10-community-unknown-qwen3-6-35b-a3b-ud-q3-k-m/engine-log-excerpt.txt": {
+        "original_sha256": "4d869569cb03b5995db8990581a77686b96064e18bc129057f66bebdeaa48014",
+        "published_sha256": "4d869569cb03b5995db8990581a77686b96064e18bc129057f66bebdeaa48014",
+        "string_redactions_only": true
+      },
+      "2026-11-10-community-unknown-qwen3-6-35b-a3b-ud-q3-k-m/README.md": {
+        "original_sha256": "19c4db5686398f0c320bf81db1336eaf05257576b5664320e12232af1535b150",
+        "published_sha256": "cdf7643a6b96088853aa7b09b22f1a2f738c7a97a98b4fd2010e5c14dc82d8af",
+        "string_redactions_only": false,
+        "report_prose_corrected_from_verified_provenance": true
+      },
+      "2026-11-10-community-unknown-qwen3-6-35b-a3b-ud-q3-k-m/results.json": {
+        "original_sha256": "580fa6ee812067b84c90f97319b7417b1c0979815c99bf8712bd53f58846a2d5",
+        "published_sha256": "a2dd02754b72fea9e47142e0032646bff461d5e2784242b927710e29a2903055",
+        "string_redactions_only": true
+      },
+      "initial-expert-profile.json": {
+        "original_sha256": "bd39e56920054d0f0101ba77ef96e713b07243465d17c85409fc87316fbc21de",
+        "published_sha256": "80850db6f28de280a0491c91b0f7d5106ca14f3b226b1fd92d15b83c4b77ae5b",
+        "string_redactions_only": true
+      },
+      "provenance.json": {
+        "original_sha256": "687d8bf83efe3f84b43a94fab09a02e66c70eb691c2622cb63d5b3622b041412",
+        "published_sha256": "788f8843b75606268e1ca014b2ddd1c6721b4a0166acc9ee80149dd10baddb06",
+        "string_redactions_only": true
+      },
+      "published-config.json": {
+        "original_sha256": "7139117d6bbe458416b7bf629594abaab991b7f4cc59eb474651adf575a83085",
+        "published_sha256": "e44b4cd96f9bea12724286a13cdad07cebc05ff7ede29108ae07ae86e227e1d2",
+        "string_redactions_only": true
+      }
+    },
+    "qwen36-ud-q4_k_m": {
+      "2026-11-10-community-unknown-qwen3-6-35b-a3b-ud-q4-k-m/engine-log-excerpt.txt": {
+        "original_sha256": "4d869569cb03b5995db8990581a77686b96064e18bc129057f66bebdeaa48014",
+        "published_sha256": "4d869569cb03b5995db8990581a77686b96064e18bc129057f66bebdeaa48014",
+        "string_redactions_only": true
+      },
+      "2026-11-10-community-unknown-qwen3-6-35b-a3b-ud-q4-k-m/README.md": {
+        "original_sha256": "9b5d75a1a6e133a769a1c0ce4b872f8e9f36c1e92743d1a2c46960b88b6e7543",
+        "published_sha256": "f181ec7a50242277cc4556008bafda93ec38ce19c88b219a704dc3caf9d669b3",
+        "string_redactions_only": false,
+        "report_prose_corrected_from_verified_provenance": true
+      },
+      "2026-11-10-community-unknown-qwen3-6-35b-a3b-ud-q4-k-m/results.json": {
+        "original_sha256": "2bba80883cdbc84eb110f3ad5dc70f8650d0f5827f911469d7caf943cb1b4fff",
+        "published_sha256": "8c4e70870848cf790c235b396dc2d20aafa6cbaaf627d0b8c94d9d6d551bc1af",
+        "string_redactions_only": true
+      },
+      "initial-expert-profile.json": {
+        "original_sha256": "12cf06ee3f8d94bd8e6fcbf38c18005393a8c9b37602ae574703237dd6ad54e5",
+        "published_sha256": "4f95747101d0612dd049af1d8b424c09b2b2d66a49ab6e301bc4f26cf1f35625",
+        "string_redactions_only": true
+      },
+      "provenance.json": {
+        "original_sha256": "595e5126cbf92367d6b5806623183b4596772e7eff556f56e4ef4096b926c143",
+        "published_sha256": "dce4117058c2e105bab3367f6b1baeccb2dcaa79aa35c9f8e4ffa3f73432bc92",
+        "string_redactions_only": true
+      },
+      "published-config.json": {
+        "original_sha256": "840190b20759a70ea89fe087166f386ce41facc64cc0e33394f7436fb312da30",
+        "published_sha256": "dd083e4f92e83c5aaa93930e52231e0166b1d9d0200005f454e8a5b5560d6eae",
+        "string_redactions_only": true
+      }
+    },
+    "gemma4-ud-q4_k_m": {
+      "2026-11-10-community-unknown-gemma-4-26b-a4b-ud-q4-k-m/engine-log-excerpt.txt": {
+        "original_sha256": "4d869569cb03b5995db8990581a77686b96064e18bc129057f66bebdeaa48014",
+        "published_sha256": "4d869569cb03b5995db8990581a77686b96064e18bc129057f66bebdeaa48014",
+        "string_redactions_only": true
+      },
+      "2026-11-10-community-unknown-gemma-4-26b-a4b-ud-q4-k-m/README.md": {
+        "original_sha256": "e3212cea9d38f1e26e2bf44c7d8d948f5b7ce37d53fcf2a42b70b86002b6b057",
+        "published_sha256": "055de9c27ba4c05e2a1038845b0cc1db191c3a4f7f82188ea284eec22b398bb4",
+        "string_redactions_only": false,
+        "report_prose_corrected_from_verified_provenance": true
+      },
+      "2026-11-10-community-unknown-gemma-4-26b-a4b-ud-q4-k-m/results.json": {
+        "original_sha256": "f79ba6feae9dd1bbed902a3745f239b38ea12209417f073e8a4a929970281647",
+        "published_sha256": "a734eca3cdaa297d60d2a18e81a4ec082f6d9c1fb5be3fd118bfaaf6645ddbdb",
+        "string_redactions_only": true
+      },
+      "initial-expert-profile.json": {
+        "original_sha256": "cbe15a8e3e9f42810b90a4198821754c6aec8fa066d856c0bde31b70286e362d",
+        "published_sha256": "ba5711a9fa1e12ca7bcdd9e25f703957f7235d0572d3965425cafe5c3aeea940",
+        "string_redactions_only": true
+      },
+      "provenance.json": {
+        "original_sha256": "7a4d320b8f7cfe92e283f882aaf84a94b285bbcb498e83d61faf0b2cd844b0cf",
+        "published_sha256": "b77e65a440ad1c2fc539f0fa4da204900edb2abef52f82e7048417cc6570139d",
+        "string_redactions_only": true
+      },
+      "published-config.json": {
+        "original_sha256": "707865c0390da35ccbd1f361f3aeb71e9d24a850f24656aa1645236be1740f00",
+        "published_sha256": "29defdafcbffbfb3ead85efd26fd9a62c0c34c1349d0ab37508be116917fcdc4",
+        "string_redactions_only": true
+      }
+    },
+    "tiel-ud-q3_k_xl": {
+      "2026-11-10-community-unknown-tiel-coder-35b-a3b-ud-q3-k-xl/engine-log-excerpt.txt": {
+        "original_sha256": "4d869569cb03b5995db8990581a77686b96064e18bc129057f66bebdeaa48014",
+        "published_sha256": "4d869569cb03b5995db8990581a77686b96064e18bc129057f66bebdeaa48014",
+        "string_redactions_only": true
+      },
+      "2026-11-10-community-unknown-tiel-coder-35b-a3b-ud-q3-k-xl/README.md": {
+        "original_sha256": "3ab9fe1074026e03056c676e1b60debc78dc1ab75de09b28108322f0933d949a",
+        "published_sha256": "901179638d869b8549564f7fff001e96836b266db404db9467cf41414feb478d",
+        "string_redactions_only": false,
+        "report_prose_corrected_from_verified_provenance": true
+      },
+      "2026-11-10-community-unknown-tiel-coder-35b-a3b-ud-q3-k-xl/results.json": {
+        "original_sha256": "e11dfad64fcf9f0657dbaace6244ce26678d77f12793abe811b6f27d7a6e2abb",
+        "published_sha256": "c2226adb96be9a58e30c9d9fee80bdadefe9eddbd06aa1b0af86f2b8906dd150",
+        "string_redactions_only": true
+      },
+      "initial-expert-profile.json": {
+        "original_sha256": "dac9e5efa3f0de6adb1d416b0aff481900bb1a0b1d25211848b612d548c2263b",
+        "published_sha256": "fd714acfb602cb29d26a0b9d6c9a2e421524375a67b9df4d6225de4dc81d88a3",
+        "string_redactions_only": true
+      },
+      "provenance.json": {
+        "original_sha256": "070cd491ca586738c448664e5cf33d511550dc0309dfbb91028b898a40e18a45",
+        "published_sha256": "557744e7b5b9720a45c1a79691f34fb976f378a630cf1c3de8616c5d0ce110ca",
+        "string_redactions_only": true
+      },
+      "published-config.json": {
+        "original_sha256": "ccb5c4f7da268837568835adbc2ac649dc0a792a8d297798f3492cbf3b8dccd3",
+        "published_sha256": "68ec663049902681b30202a0a069ee1f77d40f73bd66f5087d32cab7549a1df4",
+        "string_redactions_only": true
+      }
+    },
+    "qwen36-q4xl-cross": {
+      "2026-11-10-community-unknown-qwen3-6-35b-a3b-ud-q4-k-xl/engine-log-excerpt.txt": {
+        "original_sha256": "4d869569cb03b5995db8990581a77686b96064e18bc129057f66bebdeaa48014",
+        "published_sha256": "4d869569cb03b5995db8990581a77686b96064e18bc129057f66bebdeaa48014",
+        "string_redactions_only": true
+      },
+      "2026-11-10-community-unknown-qwen3-6-35b-a3b-ud-q4-k-xl/README.md": {
+        "original_sha256": "c278a7d143319c2da23fa6f33a1bc3cf1a9c9a5c4c3f2958b12d4c423319aed3",
+        "published_sha256": "e830756b219c040970c5e59736703eaf0b5efe8bac6b9d8dead346ad7e7919d8",
+        "string_redactions_only": false,
+        "report_prose_corrected_from_verified_provenance": true
+      },
+      "2026-11-10-community-unknown-qwen3-6-35b-a3b-ud-q4-k-xl/results.json": {
+        "original_sha256": "6309dd12fc93dedc48d99fe478a8cb6ef307ad1938ef8ecab4a7667f362aace4",
+        "published_sha256": "20d643f08a234bb85084cd1b037681f43cc5d6dffe268501babd70c4b46d8171",
+        "string_redactions_only": true
+      },
+      "initial-expert-profile.json": {
+        "original_sha256": "dcdb1732f91a79ff07b4b4fd35327aca0a963217bb2c6e9c00a40a033c4c198b",
+        "published_sha256": "f151442d534fa7e1195c4aaa86b72ef6b927edab9bf0a8e359b8b5656b181811",
+        "string_redactions_only": true
+      },
+      "provenance.json": {
+        "original_sha256": "099662328beba704000d122af0081ae2648856994f1b9398c9f5b122f4b7862c",
+        "published_sha256": "80fc7780ced3647cd73c370c9e78451669efdf1e6a405d365ed855f3c879a627",
+        "string_redactions_only": true
+      },
+      "published-config.json": {
+        "original_sha256": "fad4d0dc081bb331220f7e2a9349ebd8fc5243b088e484f1b393591c689713ff",
+        "published_sha256": "6d13ff93a03b1f827091503d808e0b9642e02a7cacb8ca0d89e89b11f7bd5fdd",
+        "string_redactions_only": true
+      }
+    }
+  },
+  "additional_public_provenance": {
+    "MODEL_IDENTITIES.json": {
+      "sha256": "475b913ea1f399f193a6898f993c2e915e89b527fbfc586a6a9135fc7927256f",
+      "scope": "Exact benchmark main/draft artifact content at immutable published repository revisions; no inference about original historical download dates."
+    }
+  }
+}

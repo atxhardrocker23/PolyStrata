@@ -1,0 +1,7 @@
+{
+  "stage": "official",
+  "profile_filename": "qwen36-q4xl-cross-official.txt",
+  "present_before_start": false,
+  "sha256_before_start": null,
+  "note": "Checked before starting this stage; a profile written later by adaptive placement is not its initial seed."
+}

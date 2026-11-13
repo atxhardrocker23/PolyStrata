@@ -1,0 +1,136 @@
+{
+  "collected_utc": "2026-11-10T09:05:18.266268+00:00",
+  "scope": "Host resource sampler at nominal10-second cadence, within each official harness process receipt window (includes loading, warm-up and shutdown). Sampled maximum is not a continuously measured peak. Host available RAM is not inference process RSS.",
+  "suites": {
+    "qwen36-ud-q3_k_m": {
+      "started_utc": "2026-11-10T07:34:41.753167+00:00",
+      "completed_utc": "2026-11-10T07:39:28.659227+00:00",
+      "samples": 24,
+      "vram_used_bytes": {
+        "min": 2288680960,
+        "max": 11806154752,
+        "samples": 24
+      },
+      "gpu_temperature_c": {
+        "min": 40.0,
+        "max": 65.0,
+        "samples": 24
+      },
+      "gpu_power_w": {
+        "min": 11.0,
+        "max": 211.0,
+        "samples": 24
+      },
+      "host_available_ram_min_bytes": 62945112064,
+      "host_swap_used_max_bytes": 12288,
+      "process_ram_peak_bytes": null,
+      "process_ram_missing_reason": "The resource watcher did not sample per-process RSS.",
+      "device_vram_peak_bytes": null,
+      "device_vram_peak_missing_reason": "Only periodic samples, not continuous peak tracking."
+    },
+    "qwen36-ud-q4_k_m": {
+      "started_utc": "2026-11-10T07:39:39.199462+00:00",
+      "completed_utc": "2026-11-10T07:44:52.206564+00:00",
+      "samples": 26,
+      "vram_used_bytes": {
+        "min": 2288041984,
+        "max": 11803377664,
+        "samples": 26
+      },
+      "gpu_temperature_c": {
+        "min": 50.0,
+        "max": 66.0,
+        "samples": 26
+      },
+      "gpu_power_w": {
+        "min": 7.0,
+        "max": 211.0,
+        "samples": 26
+      },
+      "host_available_ram_min_bytes": 62874480640,
+      "host_swap_used_max_bytes": 12288,
+      "process_ram_peak_bytes": null,
+      "process_ram_missing_reason": "The resource watcher did not sample per-process RSS.",
+      "device_vram_peak_bytes": null,
+      "device_vram_peak_missing_reason": "Only periodic samples, not continuous peak tracking."
+    },
+    "gemma4-ud-q4_k_m": {
+      "started_utc": "2026-11-10T07:45:06.087459+00:00",
+      "completed_utc": "2026-11-10T07:50:24.996318+00:00",
+      "samples": 27,
+      "vram_used_bytes": {
+        "min": 227323904,
+        "max": 11819081728,
+        "samples": 27
+      },
+      "gpu_temperature_c": {
+        "min": 54.0,
+        "max": 67.0,
+        "samples": 27
+      },
+      "gpu_power_w": {
+        "min": 10.0,
+        "max": 214.0,
+        "samples": 27
+      },
+      "host_available_ram_min_bytes": 61730955264,
+      "host_swap_used_max_bytes": 12288,
+      "process_ram_peak_bytes": null,
+      "process_ram_missing_reason": "The resource watcher did not sample per-process RSS.",
+      "device_vram_peak_bytes": null,
+      "device_vram_peak_missing_reason": "Only periodic samples, not continuous peak tracking."
+    },
+    "tiel-ud-q3_k_xl": {
+      "started_utc": "2026-11-10T07:50:35.310352+00:00",
+      "completed_utc": "2026-11-10T07:55:28.614261+00:00",
+      "samples": 24,
+      "vram_used_bytes": {
+        "min": 11794423808,
+        "max": 11806617600,
+        "samples": 24
+      },
+      "gpu_temperature_c": {
+        "min": 52.0,
+        "max": 66.0,
+        "samples": 24
+      },
+      "gpu_power_w": {
+        "min": 10.0,
+        "max": 211.0,
+        "samples": 24
+      },
+      "host_available_ram_min_bytes": 62831312896,
+      "host_swap_used_max_bytes": 12288,
+      "process_ram_peak_bytes": null,
+      "process_ram_missing_reason": "The resource watcher did not sample per-process RSS.",
+      "device_vram_peak_bytes": null,
+      "device_vram_peak_missing_reason": "Only periodic samples, not continuous peak tracking."
+    },
+    "qwen36-q4xl-cross": {
+      "started_utc": "2026-11-10T07:55:39.376762+00:00",
+      "completed_utc": "2026-11-10T08:00:58.397276+00:00",
+      "samples": 27,
+      "vram_used_bytes": {
+        "min": 16498688,
+        "max": 11803435008,
+        "samples": 27
+      },
+      "gpu_temperature_c": {
+        "min": 51.0,
+        "max": 66.0,
+        "samples": 26
+      },
+      "gpu_power_w": {
+        "min": 4.0,
+        "max": 211.0,
+        "samples": 26
+      },
+      "host_available_ram_min_bytes": 62755622912,
+      "host_swap_used_max_bytes": 12288,
+      "process_ram_peak_bytes": null,
+      "process_ram_missing_reason": "The resource watcher did not sample per-process RSS.",
+      "device_vram_peak_bytes": null,
+      "device_vram_peak_missing_reason": "Only periodic samples, not continuous peak tracking."
+    }
+  }
+}

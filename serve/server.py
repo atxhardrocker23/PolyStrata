@@ -2358,6 +2358,11 @@ def vision_start_error(line: str, log=None) -> str:
                 "may use the card, and the engine already holds it. Check with: nvidia-smi --query-gpu=compute_mode "
                 "--format=csv; set it back with: sudo nvidia-smi -c DEFAULT (or run the encoder on another card). "
                 "First line from the encoder: " + (text or "(none)"))
+    if not text:   # it ended without a line (issue 162): the reason is in its stderr, the log's last lines
+        last = [ln.strip() for ln in tail.splitlines() if ln.strip()][-6:]
+        where = getattr(log, "name", None) or "the model's .log file"
+        return ("the vision encoder ended before it was ready; the last lines of " + where + ":\n" + "\n".join(last)
+                if last else "the vision encoder ended before it was ready and wrote nothing to " + where)
     return "the vision encoder did not start: " + text
 
 
@@ -2762,8 +2767,10 @@ def engine_args(cfg: dict) -> list[str]:
     if layer_split_of(cfg) and cfg.get("split_skip_if_fits") and "--split-skip-if-fits" not in args:
         args.append("--split-skip-if-fits")
     # #533 (opt-in): "vram_elastic": true - the expert cache in segments, so POST /v1/vram can give VRAM back to other
-    # programs and take it back; "vram_segment_mib" sets the segment size (the engine's default: 512)
-    if cfg.get("vram_elastic") is True and "--vram-elastic" not in args:
+    # programs and take it back; "vram_segment_mib" sets the segment size (the engine's default: 512).  strata-poly
+    # has neither option and ends at one it does not know: its cache is resized by VRAM as it is (vram_elastic=1 in
+    # its INFO line)
+    if cfg.get("vram_elastic") is True and "--vram-elastic" not in args and not poly:
         args.append("--vram-elastic")
         seg = cfg.get("vram_segment_mib")
         if isinstance(seg, int) and not isinstance(seg, bool) and seg > 0 and "--vram-segment-mib" not in args:
@@ -7515,7 +7522,13 @@ def start_model(cfg: dict, tok, lazy: bool = False):
         vcfg = {k: (os.path.abspath(os.path.join(cfg.get("cwd") or ".", v))
                     if k in ("exe", "mmproj", "model") and isinstance(v, str) and not os.path.isabs(v) else v)
                 for k, v in cfg["vision"].items()}
-        if vcfg.get("elastic") is True and vcfg.get("gpu") and cfg.get("vram_elastic") is not True:
+        if vcfg.get("elastic") is True and vcfg.get("gpu") and poly_engine(cfg):
+            # the turns around the encoder ask for a reserve of 0: the whole cache for the Strata project's engine,
+            # strata-poly's smallest reserve (256 MiB, under the one it started with)
+            print('[strata] the vision section\'s "elastic" does not start a GPU encoder on demand with strata-poly: '
+                  "the encoder starts with the model (an encoder on the CPU starts with the first picture)", flush=True)
+            vcfg["elastic"] = False
+        elif vcfg.get("elastic") is True and vcfg.get("gpu") and cfg.get("vram_elastic") is not True:
             print('[strata] the vision section\'s "elastic" needs "vram_elastic": true (the expert cache gives the '
                   "encoder its VRAM): the encoder starts with the model instead", flush=True)
             vcfg["elastic"] = False

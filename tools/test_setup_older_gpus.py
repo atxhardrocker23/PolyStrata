@@ -263,6 +263,24 @@ class Start(unittest.TestCase):
             self.assertIn("moves to the experimental CUDA 12 engine", text)
             self.assertEqual(json.loads(cfg_path.read_text())["cuda"], 12)
 
+    def test_a_card_added_keeps_a_max_compatibility_engine_portable(self):
+        # PR 58: an engine built with --max-compatibility is compiled for the new card as the release build again
+        with tempfile.TemporaryDirectory() as d:
+            eng = Path(d) / "engine"
+            eng.mkdir()
+            (eng / "BUILD.json").write_text(json.dumps({"archs": [86], "portable": True, "vision": "none"}))
+            built = []
+            with mock.patch.object(setup, "engine_dir", lambda tk=13: eng), \
+                    mock.patch.object(setup, "engine_runs_on", lambda g, tk=13: g["arch"] == "86"), \
+                    mock.patch.object(setup, "gpu_info", lambda i=None: card(0, "RTX 3090", 24.0, "86")), \
+                    mock.patch.object(setup, "get_llama_cpp", lambda vision=False: Path("llama")), \
+                    mock.patch.object(setup, "build_engine", lambda *a, **k: built.append(k)), \
+                    mock.patch.object(setup, "write_config", lambda p, c: None):
+                quiet(setup.ensure_engine_for, [card(0, "RTX 3090", 24.0, "86"), card(1, "RTX 4090", 24.0, "89")],
+                      Path(d) / "strata-x.json", {"args": []}, True)
+            self.assertEqual(len(built), 1)
+            self.assertTrue(built[0].get("portable"))
+
     def test_update_looks_at_both_engines(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

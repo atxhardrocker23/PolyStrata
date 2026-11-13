@@ -1,0 +1,87 @@
+{
+  "collected_utc": "2026-11-10T07:55:39.304314+00:00",
+  "source_commit": "83a7a33272413bf87b8d2742dc557c165e2cb2d2",
+  "release": "v0.1.45-poly.9",
+  "kernel": "7.0.14-26-pve",
+  "guest_os": "Debian GNU/Linux 13 (trixie)",
+  "engine": {
+    "filename": "strata-poly",
+    "sha256": "54c68af73891d7ac77b25af48b83b99bb1ad350f4ed73589a50add58d7e0eaa4"
+  },
+  "harness": {
+    "path": "tools/strata_bench.py",
+    "sha256": "aa2672be329f425045d9559f8da165257493c7ca33d6ce4b12053b3fd61d42b1"
+  },
+  "model_name": "tiel-coder-35b-a3b-ud-q3_k_xl",
+  "model_files": [
+    {
+      "filename": "Tiel-Coder-35B-A3B-MTP-UD-Q3_K_XL.gguf",
+      "bytes": 17234935648,
+      "sha256": "46b8fbeba6e888c9a101e49cc717baa9bb8dfa0d203ec7b3185288159543ec14"
+    }
+  ],
+  "tokenizer_files": [
+    {
+      "filename": "chat_template.jinja",
+      "bytes": 30517,
+      "sha256": "a41d3a6495c7531e85a45b665ae99c0251a68eaef5fada66cfa283827d3f6422"
+    },
+    {
+      "filename": "merges.txt",
+      "bytes": 3353258,
+      "sha256": "4ba698529766c7a2f5052083ea10cdf2485577f5237a332ee291054eb11e3332"
+    },
+    {
+      "filename": "token_type.json",
+      "bytes": 744960,
+      "sha256": "5088c8c298fc06af8382ddb3b76c888703ac2634e82263b97eedcc2ad202738b"
+    },
+    {
+      "filename": "tokenizer.json",
+      "bytes": 589,
+      "sha256": "0f07678e69a0f3eab2d69875163e602b8f9efb3fae836967d173104e3534b7ee"
+    },
+    {
+      "filename": "vocab.json",
+      "bytes": 5737005,
+      "sha256": "4ba64f0332abcfb0b600b7df1537d1e836e68009d5fb7cdb77339738dc6365c4"
+    }
+  ],
+  "config_sha256_private_original": "ccb5c4f7da268837568835adbc2ac649dc0a792a8d297798f3492cbf3b8dccd3",
+  "cpu": "AMD Ryzen 5 3600 6-Core Processor",
+  "guest_memory_limit_note": "56 GiB Proxmox LXC allocation; 64 GB physical host; see externally verified hardware provenance",
+  "config": {
+    "exe": "<installation>/engine-poly/strata-poly",
+    "args": [
+      "--model",
+      "<model-store>/models/tiel-UD-Q3_K_XL/Tiel-Coder-35B-A3B-MTP-UD-Q3_K_XL.gguf",
+      "--kv-whole",
+      "--max-context",
+      "65536",
+      "--expert-profile",
+      "<experiment>/profiles/tiel-ud-q3_k_xl-official.txt",
+      "--conversation-cache-mib",
+      "0",
+      "--threads",
+      "8",
+      "--vram-reserve-mib",
+      "1024"
+    ],
+    "cwd": "<installation>",
+    "tokenizer": "<model-store>/packs/tiel-ud-q3_k_xl/tokenizer",
+    "model_name": "tiel-coder-35b-a3b-ud-q3_k_xl",
+    "display_name": "Tiel Coder 35B-A3B UD-Q3_K_XL",
+    "log": "<experiment>/tiel-ud-q3_k_xl-official-engine.log",
+    "lib_dirs": [
+      "<venv>/lib/python3.13/site-packages/_rocm_sdk_devel/lib",
+      "<venv>/lib/python3.13/site-packages/_rocm_sdk_libraries_gfx103X_all/lib"
+    ],
+    "port": 8080,
+    "gpu": 0,
+    "gpus_asked": true,
+    "host": "127.0.0.1",
+    "open_browser": false,
+    "reasoning_budget_tokens": 512,
+    "reasoning_effort": "none"
+  }
+}

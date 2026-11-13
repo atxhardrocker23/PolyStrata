@@ -1,0 +1,35 @@
+{
+  "exe": "<installation>/engine-poly/strata-poly",
+  "args": [
+    "--model",
+    "<model-store>/models/tiel-UD-Q3_K_XL/Tiel-Coder-35B-A3B-MTP-UD-Q3_K_XL.gguf",
+    "--kv-whole",
+    "--max-context",
+    "65536",
+    "--expert-profile",
+    "<experiment>/profiles/tiel-ud-q3_k_xl-official.txt",
+    "--conversation-cache-mib",
+    "0",
+    "--threads",
+    "8",
+    "--vram-reserve-mib",
+    "1024"
+  ],
+  "cwd": "<installation>",
+  "tokenizer": "<model-store>/packs/tiel-ud-q3_k_xl/tokenizer",
+  "model_name": "tiel-coder-35b-a3b-ud-q3_k_xl",
+  "display_name": "Tiel Coder 35B-A3B UD-Q3_K_XL",
+  "log": "<experiment>/tiel-ud-q3_k_xl-official-engine.log",
+  "lib_dirs": [
+    "<venv>/lib/python3.13/site-packages/_rocm_sdk_devel/lib",
+    "<venv>/lib/python3.13/site-packages/_rocm_sdk_libraries_gfx103X_all/lib"
+  ],
+  "port": 8080,
+  "gpu": 0,
+  "gpus_asked": true,
+  "host": "127.0.0.1",
+  "open_browser": false,
+  "api_key": "<redacted>",
+  "reasoning_budget_tokens": 512,
+  "reasoning_effort": "none"
+}

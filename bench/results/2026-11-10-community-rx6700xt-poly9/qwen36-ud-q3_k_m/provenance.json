@@ -1,0 +1,87 @@
+{
+  "collected_utc": "2026-11-10T07:39:39.140254+00:00",
+  "source_commit": "83a7a33272413bf87b8d2742dc557c165e2cb2d2",
+  "release": "v0.1.45-poly.9",
+  "kernel": "7.0.14-26-pve",
+  "guest_os": "Debian GNU/Linux 13 (trixie)",
+  "engine": {
+    "filename": "strata-poly",
+    "sha256": "54c68af73891d7ac77b25af48b83b99bb1ad350f4ed73589a50add58d7e0eaa4"
+  },
+  "harness": {
+    "path": "tools/strata_bench.py",
+    "sha256": "aa2672be329f425045d9559f8da165257493c7ca33d6ce4b12053b3fd61d42b1"
+  },
+  "model_name": "qwen3.6-35b-a3b-ud-q3_k_m",
+  "model_files": [
+    {
+      "filename": "Qwen3.6-35B-A3B-UD-Q3_K_M.gguf",
+      "bytes": 17104402720,
+      "sha256": "8966dd0cd8c543c4228490a2a8b0e0814fc4f1e6a8e199ceed4de6754ae7b8e1"
+    }
+  ],
+  "tokenizer_files": [
+    {
+      "filename": "chat_template.jinja",
+      "bytes": 8057,
+      "sha256": "55d4931433fe502b794226ee7f4d206a6bdd436ac9f80eb7d8ebb4c639f9ea0c"
+    },
+    {
+      "filename": "merges.txt",
+      "bytes": 3353258,
+      "sha256": "4ba698529766c7a2f5052083ea10cdf2485577f5237a332ee291054eb11e3332"
+    },
+    {
+      "filename": "token_type.json",
+      "bytes": 744960,
+      "sha256": "5088c8c298fc06af8382ddb3b76c888703ac2634e82263b97eedcc2ad202738b"
+    },
+    {
+      "filename": "tokenizer.json",
+      "bytes": 589,
+      "sha256": "5e89589848ca155b6d1583b8b4ec52670558d1bf368b0ece589201290898c874"
+    },
+    {
+      "filename": "vocab.json",
+      "bytes": 5737005,
+      "sha256": "4ba64f0332abcfb0b600b7df1537d1e836e68009d5fb7cdb77339738dc6365c4"
+    }
+  ],
+  "config_sha256_private_original": "7139117d6bbe458416b7bf629594abaab991b7f4cc59eb474651adf575a83085",
+  "cpu": "AMD Ryzen 5 3600 6-Core Processor",
+  "guest_memory_limit_note": "56 GiB Proxmox LXC allocation; 64 GB physical host; see externally verified hardware provenance",
+  "config": {
+    "exe": "<installation>/engine-poly/strata-poly",
+    "args": [
+      "--model",
+      "<model-store>/models/qwen36-UD-Q3_K_M/Qwen3.6-35B-A3B-UD-Q3_K_M.gguf",
+      "--kv-whole",
+      "--max-context",
+      "65536",
+      "--expert-profile",
+      "<experiment>/profiles/qwen36-ud-q3_k_m-official.txt",
+      "--conversation-cache-mib",
+      "0",
+      "--threads",
+      "8",
+      "--vram-reserve-mib",
+      "1024"
+    ],
+    "cwd": "<installation>",
+    "tokenizer": "<model-store>/packs/qwen36-ud-q3_k_m/tokenizer",
+    "model_name": "qwen3.6-35b-a3b-ud-q3_k_m",
+    "display_name": "Qwen3.6-35B-A3B UD-Q3_K_M",
+    "log": "<experiment>/qwen36-ud-q3_k_m-official-engine.log",
+    "lib_dirs": [
+      "<venv>/lib/python3.13/site-packages/_rocm_sdk_devel/lib",
+      "<venv>/lib/python3.13/site-packages/_rocm_sdk_libraries_gfx103X_all/lib"
+    ],
+    "port": 8080,
+    "gpu": 0,
+    "gpus_asked": true,
+    "host": "127.0.0.1",
+    "open_browser": false,
+    "reasoning_budget_tokens": 512,
+    "reasoning_effort": "none"
+  }
+}

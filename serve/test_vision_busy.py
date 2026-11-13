@@ -32,6 +32,21 @@ class Busy(unittest.TestCase):
         finally:
             Path(name).unlink()
 
+    def test_an_encoder_that_ends_silently_shows_the_log_tail(self):
+        # issue 162: it printed nothing on stdout, so the message ended at the colon
+        with tempfile.NamedTemporaryFile("w+", suffix=".log", delete=False) as f:
+            f.write("engine line\n\nstrata-vision: error while loading shared libraries: libcudart.so.12\n")
+            name = f.name
+        try:
+            with open(name, "a") as log:
+                m = server.vision_start_error("", log)
+            self.assertIn("ended before it was ready", m)
+            self.assertIn("libcudart.so.12", m)
+            self.assertIn(name, m)
+        finally:
+            Path(name).unlink()
+        self.assertIn("wrote nothing", server.vision_start_error(""))
+
     def test_other_failures_are_unchanged(self):
         self.assertEqual(server.vision_start_error("ERR no mmproj\n"), "the vision encoder did not start: ERR no mmproj")
 

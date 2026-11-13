@@ -295,7 +295,7 @@ class NonInteractiveInstallFlow(unittest.TestCase):
             dst.write_bytes(b"GGUF")
             setup.mark(dst)
 
-        def fake_build(gpu, yes, llama, vision="none", toolkit=13):
+        def fake_build(gpu, yes, llama, vision="none", toolkit=13, portable=False):
             eng = self.t / setup.ENGINE_POLY_DIR
             eng.mkdir(parents=True, exist_ok=True)
             (eng / "BUILD.json").write_text(json.dumps({"source": "local", "cuda_dirs": ["/cuda/lib64"]}))

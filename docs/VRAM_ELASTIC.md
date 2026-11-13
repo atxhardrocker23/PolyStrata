@@ -18,6 +18,10 @@ a `--serve` engine, with a layer split, with helper caches on other GPUs, with a
 (NVIDIA only). If the driver offers no virtual memory management the start fails with an error naming it **(code)**.
 Without the flag nothing changes: the same answers as without it.
 
+This page is about the Strata project's engine (Qwen3.8). strata-poly, the engine of the models PolyStrata adds, has no flag for
+it: its expert cache takes `POST /v1/vram` as it is, and the server does not pass the config's `"vram_elastic"` on to
+it (strata-poly ends at an option it does not know). A reserve of 0 leaves strata-poly its smallest one, 256 MiB.
+
 ## The request
 
 ```
@@ -109,6 +113,9 @@ expert outside the cache), but I have not run a fault-injection test of these tw
 
 An encoder on the CPU (`"gpu": false` in the `"vision"` section) starts with the first picture and stops when idle by
 default, as below but without the `VRAM` commands: it takes no VRAM. `"elastic": false` keeps it running.
+
+With strata-poly a GPU encoder starts with the model whatever `"elastic"` says, and the server says so: the turns
+below ask for a reserve of 0, which strata-poly reads another way (above). Its CPU encoder is on demand as here.
 
 With `"elastic": true` in the config's `"vision"` section (and `"vram_elastic": true`; without it the server says so
 and starts the encoder with the model, as before) the GPU encoder is not started with the server or with a load:

@@ -1,0 +1,37 @@
+{
+  "exe": "<installation>/engine-poly/strata-poly",
+  "args": [
+    "--model",
+    "<model-store>/models/gemma4-UD-Q4_K_M/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+    "--draft-model",
+    "<model-store>/models/gemma4-UD-Q4_K_M/mtp-gemma-4-26B-A4B-it-Q8_0.gguf",
+    "--kv-whole",
+    "--max-context",
+    "65536",
+    "--expert-profile",
+    "<experiment>/profiles/gemma4-ud-q4_k_m-official.txt",
+    "--conversation-cache-mib",
+    "0",
+    "--threads",
+    "8",
+    "--vram-reserve-mib",
+    "1024"
+  ],
+  "cwd": "<installation>",
+  "tokenizer": "<model-store>/packs/gemma4-ud-q4_k_m/tokenizer",
+  "model_name": "gemma-4-26b-a4b-ud-q4_k_m",
+  "display_name": "Gemma 4 26B-A4B UD-Q4_K_M",
+  "log": "<experiment>/gemma4-ud-q4_k_m-official-engine.log",
+  "lib_dirs": [
+    "<venv>/lib/python3.13/site-packages/_rocm_sdk_devel/lib",
+    "<venv>/lib/python3.13/site-packages/_rocm_sdk_libraries_gfx103X_all/lib"
+  ],
+  "port": 8080,
+  "gpu": 0,
+  "gpus_asked": true,
+  "host": "127.0.0.1",
+  "open_browser": false,
+  "api_key": "<redacted>",
+  "reasoning_budget_tokens": 512,
+  "reasoning_effort": "none"
+}

@@ -1,0 +1,94 @@
+{
+  "collected_utc": "2026-11-10T07:50:35.239497+00:00",
+  "source_commit": "83a7a33272413bf87b8d2742dc557c165e2cb2d2",
+  "release": "v0.1.45-poly.9",
+  "kernel": "7.0.14-26-pve",
+  "guest_os": "Debian GNU/Linux 13 (trixie)",
+  "engine": {
+    "filename": "strata-poly",
+    "sha256": "54c68af73891d7ac77b25af48b83b99bb1ad350f4ed73589a50add58d7e0eaa4"
+  },
+  "harness": {
+    "path": "tools/strata_bench.py",
+    "sha256": "aa2672be329f425045d9559f8da165257493c7ca33d6ce4b12053b3fd61d42b1"
+  },
+  "model_name": "gemma-4-26b-a4b-ud-q4_k_m",
+  "model_files": [
+    {
+      "filename": "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+      "bytes": 16947541728,
+      "sha256": "f2c28b3dc4776931ac6f879e11f203dec637ea0f14267a86ec8f6165f63f293f"
+    },
+    {
+      "filename": "mtp-gemma-4-26B-A4B-it-Q8_0.gguf",
+      "bytes": 461766816,
+      "sha256": "6326fb9f5e487aa8dcdd313a091e3c67724cb2a666ec3b7d2895b5b26d93ed1b"
+    }
+  ],
+  "tokenizer_files": [
+    {
+      "filename": "chat_template.jinja",
+      "bytes": 18924,
+      "sha256": "845f1ee48e39fc942fe190da9df6a1c5db229e17a96ea08966ad1c9274e73d1b"
+    },
+    {
+      "filename": "merges.json",
+      "bytes": 7215682,
+      "sha256": "5559bcf26deec637ff8107e4379b90ae35ad59469b25e0b3bad610ae6c7c6bc4"
+    },
+    {
+      "filename": "token_type.json",
+      "bytes": 786432,
+      "sha256": "5a1960565004f4ec12210cc671c9dfd2cbe8ce30c575469128d342dc4db26cbd"
+    },
+    {
+      "filename": "tokenizer.json",
+      "bytes": 487,
+      "sha256": "869d2eeee353e0af375d6b0f1bde01350da5652d241312e71b1b387961db9b4c"
+    },
+    {
+      "filename": "vocab.json",
+      "bytes": 5353679,
+      "sha256": "680c1dc49f8c7ed3a76006aea67942f6c6359413e03098d02b87de30ef77944a"
+    }
+  ],
+  "config_sha256_private_original": "707865c0390da35ccbd1f361f3aeb71e9d24a850f24656aa1645236be1740f00",
+  "cpu": "AMD Ryzen 5 3600 6-Core Processor",
+  "guest_memory_limit_note": "56 GiB Proxmox LXC allocation; 64 GB physical host; see externally verified hardware provenance",
+  "config": {
+    "exe": "<installation>/engine-poly/strata-poly",
+    "args": [
+      "--model",
+      "<model-store>/models/gemma4-UD-Q4_K_M/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+      "--draft-model",
+      "<model-store>/models/gemma4-UD-Q4_K_M/mtp-gemma-4-26B-A4B-it-Q8_0.gguf",
+      "--kv-whole",
+      "--max-context",
+      "65536",
+      "--expert-profile",
+      "<experiment>/profiles/gemma4-ud-q4_k_m-official.txt",
+      "--conversation-cache-mib",
+      "0",
+      "--threads",
+      "8",
+      "--vram-reserve-mib",
+      "1024"
+    ],
+    "cwd": "<installation>",
+    "tokenizer": "<model-store>/packs/gemma4-ud-q4_k_m/tokenizer",
+    "model_name": "gemma-4-26b-a4b-ud-q4_k_m",
+    "display_name": "Gemma 4 26B-A4B UD-Q4_K_M",
+    "log": "<experiment>/gemma4-ud-q4_k_m-official-engine.log",
+    "lib_dirs": [
+      "<venv>/lib/python3.13/site-packages/_rocm_sdk_devel/lib",
+      "<venv>/lib/python3.13/site-packages/_rocm_sdk_libraries_gfx103X_all/lib"
+    ],
+    "port": 8080,
+    "gpu": 0,
+    "gpus_asked": true,
+    "host": "127.0.0.1",
+    "open_browser": false,
+    "reasoning_budget_tokens": 512,
+    "reasoning_effort": "none"
+  }
+}

@@ -666,5 +666,47 @@ class CalibrateWithModel(unittest.TestCase):
             self.assertEqual(setup.calibration_targets(ps, "Q4_K_M", None), [])
 
 
+class EnsureEnginePortable(unittest.TestCase):
+    """--max-compatibility: ensure_engine_for() keeps portable=True from BUILD.json when it rebuilds for a new card."""
+
+    def test_rebuild_for_new_card_preserves_portable_flag(self):
+        cases = [
+            ({"archs": [86], "portable": True}, True),
+            ({"archs": [86], "portable": False}, False),
+            ({"archs": [86]}, False),
+        ]
+        for meta_in, want_portable in cases:
+            with self.subTest(meta=meta_in), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                eng = root / "engine"
+                eng.mkdir()
+                (eng / "BUILD.json").write_text(json.dumps(meta_in))
+                cfg_path = root / "strata-test.json"
+                cfg = {"exe": str(eng / setup.EXE), "lib_dirs": ["<orig>"]}
+                cards = [
+                    {"index": 0, "name": "RTX 3090", "arch": "86"},
+                    {"index": 1, "name": "RTX 4090", "arch": "89"},
+                ]
+                built = []
+
+                def fake_build(gpu, vision, yes, llama, toolkit=None, portable=False):
+                    built.append({"gpu": gpu, "portable": portable, "toolkit": toolkit})
+                    (eng / "BUILD.json").write_text(json.dumps({**meta_in, "archs": gpu["archs"],
+                                                                "cuda_dirs": ["<new>"]}))
+                    return eng
+
+                with mock.patch.object(setup, "ROOT", root), \
+                        mock.patch.object(setup, "engine_runs_on", lambda g, tk=13: int(g["arch"]) == 86), \
+                        mock.patch.object(setup, "gpu_info", lambda i=0: {"index": i, "name": "RTX 3090", "arch": "86"}), \
+                        mock.patch.object(setup, "get_llama_cpp", lambda: root / "llama.cpp"), \
+                        mock.patch.object(setup, "write_config", lambda p, c: None), \
+                        mock.patch.object(setup, "build_engine", fake_build):
+                    quiet(setup.ensure_engine_for, cards, cfg_path, cfg, True)
+
+                self.assertEqual(len(built), 1)
+                self.assertEqual(built[0]["gpu"]["archs"], [86, 89])
+                self.assertEqual(built[0]["portable"], want_portable)
+
+
 if __name__ == "__main__":
     unittest.main()

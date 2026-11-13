@@ -140,7 +140,7 @@ class Config(unittest.TestCase):
             self.assertTrue(setup.poly_config(cfg))
             self.assertEqual(setup.choices_from_config(p)["family"], "glm")
 
-            def build(gpu, yes, llama, vision="none", works=True):
+            def build(gpu, yes, llama, vision="none", toolkit=13, portable=False, works=True):
                 if not works:
                     raise RuntimeError("no compiler")
                 (root / setup.ENGINE_POLY_DIR).mkdir(exist_ok=True)
@@ -232,6 +232,7 @@ class Main(unittest.TestCase):
         (self.t / "data" / "expert-profile-glm.txt").write_text("3 0 7\n")
         (self.t / "data" / "expert-profile-glm-reap50.txt").write_text("3 1 5\n")
         self.downloads, self.runs, self.verified, self.built = [], [], [], []
+        self.portable = None
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -258,12 +259,13 @@ class Main(unittest.TestCase):
             dst.write_bytes(b"")
             setup.mark(dst)
 
-        def fake_build(gpu, yes, llama, vision="none", toolkit=13):
+        def fake_build(gpu, yes, llama, vision="none", toolkit=13, portable=False):
             self.built.append(gpu["archs"])
-            self.encoder, self.toolkit = vision, toolkit
+            self.encoder, self.toolkit, self.portable = vision, toolkit, portable
             eng = self.t / setup.ENGINE_POLY_DIR
             eng.mkdir(exist_ok=True)
-            (eng / "BUILD.json").write_text(json.dumps({"source": "local", "cuda_dirs": ["/cuda/lib64"]}))
+            (eng / "BUILD.json").write_text(json.dumps({"source": "local", "cuda_dirs": ["/cuda/lib64"],
+                                                        **({"portable": True} if portable else {})}))
             return eng
 
         patches = [
@@ -333,6 +335,15 @@ class Main(unittest.TestCase):
         self.assertEqual(cfg["lib_dirs"], ["/cuda/lib64"])
         self.assertNotIn("vision", cfg)
         self.assertEqual(cfg["gpu"], 0)                                # as main() does for every model
+
+    def test_max_compatibility_is_kept_by_a_later_setup(self):
+        """--max-compatibility: a later --setup without --build keeps the portable choice in engine-poly/BUILD.json."""
+        code, out, _ = self.main(argv=["--build", "--max-compatibility"], win=True)
+        self.assertEqual(code, 0, out)
+        self.assertTrue(self.portable)
+        code, out, _ = self.main(argv=["--setup"], win=True)
+        self.assertEqual(code, 0, out)
+        self.assertTrue(self.portable)
 
     def test_a_draft_block_that_is_there_is_not_fetched_again(self):
         block = self.t / "data" / "mtp" / "glm-5.3-flash" / "draft-block.gguf"

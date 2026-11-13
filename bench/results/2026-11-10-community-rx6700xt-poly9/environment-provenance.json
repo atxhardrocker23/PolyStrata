@@ -1,0 +1,62 @@
+{
+  "collected_utc": "2026-11-10T09:03:17.616625+00:00",
+  "source_commit": "83a7a33272413bf87b8d2742dc557c165e2cb2d2",
+  "driver": {
+    "name": "amdgpu",
+    "kernel_release": "7.0.14-26-pve",
+    "module_srcversion": "B1D135B579C294611EB792D",
+    "independent_driver_version": null,
+    "missing_reason": "In-kernel amdgpu; no independent driver release version recorded."
+  },
+  "rocm_packages": [
+    {
+      "name": "rocm",
+      "version": "7.13.0a20260515"
+    },
+    {
+      "name": "rocm-sdk-core",
+      "version": "7.13.0a20260515"
+    },
+    {
+      "name": "rocm-sdk-devel",
+      "version": "7.13.0a20260515"
+    },
+    {
+      "name": "rocm-sdk-libraries-gfx103X-all",
+      "version": "7.13.0a20260515"
+    }
+  ],
+  "compiler": "AMD clang version 23.0.0git (https://github.com/ROCm/llvm-project.git 43215c73116c407735c85a180d174f718798c328+PATCHED:2506c552d8428e2cc1778bef048b20f818e06bb3)\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: <venv>/lib/python3.13/site-packages/_rocm_sdk_devel/lib/llvm/bin",
+  "engine_build": {
+    "source": "local-hip",
+    "backend": "hip",
+    "version": "0.1.45",
+    "archs": [
+      "gfx1031"
+    ],
+    "vision": "none",
+    "lib_dirs": [
+      "<venv>/lib/python3.13/site-packages/_rocm_sdk_devel/lib",
+      "<venv>/lib/python3.13/site-packages/_rocm_sdk_libraries_gfx103X_all/lib"
+    ],
+    "src": "c233795e8dcb9135"
+  },
+  "model_catalog_pins": [
+    {
+      "repository": "unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
+      "revision": "5bc3e238d916f48a861bac2f8a1990a0e9b7e98d",
+      "note": "Immutable catalog revision in the tested setup.py. Existing files were reused and their full SHA256 verified; original historical download revision is not separately attested."
+    },
+    {
+      "repository": "unsloth/gemma-4-26B-A4B-it-GGUF",
+      "revision": "c099eb48e663fd284577b04978a94ffccb261841",
+      "note": "Immutable catalog revision in the tested setup.py. Existing files were reused and their full SHA256 verified; original historical download revision is not separately attested."
+    },
+    {
+      "repository": "peculiar-ragdoll/Tiel-Coder-35B-A3B-GGUF-MTP",
+      "revision": "bbe9e566f39e4fc9652ac66b71968289a03c520a",
+      "note": "Immutable catalog revision in the tested setup.py. Existing files were reused and their full SHA256 verified; original historical download revision is not separately attested."
+    }
+  ],
+  "collection_timing_note": "Read-only package/compiler/source metadata collected after official suites. The same installed environment and unmodified build remain in place; the original harness null fields are preserved."
+}

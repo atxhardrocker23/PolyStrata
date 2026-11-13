@@ -1,0 +1,43 @@
+[strata] 2026-11-10 07:34:42 engine started: <installation>/engine-poly/strata-poly --serve --model <model-store>/models/qwen36-UD-Q3_K_M/Qwen3.6-35B-A3B-UD-Q3_K_M.gguf --kv-whole --max-context 65536 --expert-profile <experiment>/profiles/qwen36-ud-q3_k_m-official.txt --conversation-cache-mib 0 --threads 8 --vram-reserve-mib 1024
+strata-poly: loaded in 19.6 s; 4764 of 10496 routed experts in VRAM (6.2 GiB), 8 CPU threads
+strata serve: prompt 34 tokens = 0 reused + 34 read in 6271 ms (5.4 tok/s), 24 generated in 1585 ms (15.1 tok/s), drafts accepted 17 of 17
+strata serve: prompt 260 tokens = 0 reused + 260 read in 1677 ms (155.0 tok/s), 1 generated in 0 ms (2101.5 tok/s)
+strata serve: prompt 906 tokens = 0 reused + 906 read in 1027 ms (882.4 tok/s), 1 generated in 0 ms (2050.0 tok/s)
+strata serve: prompt 1028 tokens = 0 reused + 1028 read in 1428 ms (720.0 tok/s), 8 generated in 218 ms (36.7 tok/s), drafts accepted 2 of 5
+strata serve: prompt 51 tokens = 0 reused + 51 read in 309 ms (165.1 tok/s), 100 generated in 1150 ms (87.0 tok/s), drafts accepted 57 of 62
+strata serve: prompt 43 tokens = 0 reused + 43 read in 321 ms (134.1 tok/s), 100 generated in 1318 ms (75.9 tok/s), drafts accepted 51 of 59
+strata serve: prompt 46 tokens = 0 reused + 46 read in 332 ms (138.7 tok/s), 100 generated in 1267 ms (78.9 tok/s), drafts accepted 56 of 62
+strata serve: prompt 51 tokens = 0 reused + 51 read in 316 ms (161.5 tok/s), 100 generated in 1057 ms (94.6 tok/s), drafts accepted 69 of 80
+strata serve: prompt 43 tokens = 0 reused + 43 read in 326 ms (132.0 tok/s), 100 generated in 1146 ms (87.3 tok/s), drafts accepted 49 of 61
+strata serve: prompt 46 tokens = 0 reused + 46 read in 348 ms (132.3 tok/s), 100 generated in 1107 ms (90.4 tok/s), drafts accepted 55 of 71
+strata serve: prompt 51 tokens = 0 reused + 51 read in 334 ms (152.6 tok/s), 100 generated in 982 ms (101.8 tok/s), drafts accepted 65 of 69
+strata serve: prompt 43 tokens = 0 reused + 43 read in 307 ms (139.8 tok/s), 100 generated in 1098 ms (91.0 tok/s), drafts accepted 51 of 71
+strata serve: prompt 46 tokens = 0 reused + 46 read in 327 ms (140.5 tok/s), 100 generated in 1085 ms (92.2 tok/s), drafts accepted 56 of 76
+strata serve: prompt 4019 tokens = 0 reused + 4019 read in 3318 ms (1211.4 tok/s), 24 generated in 349 ms (68.8 tok/s), drafts accepted 13 of 19
+strata serve: prompt 4019 tokens = 0 reused + 4019 read in 3251 ms (1236.4 tok/s), 24 generated in 289 ms (83.1 tok/s), drafts accepted 13 of 18
+strata serve: prompt 4019 tokens = 0 reused + 4019 read in 3242 ms (1239.7 tok/s), 24 generated in 280 ms (85.6 tok/s), drafts accepted 12 of 17
+strata serve: prompt 16058 tokens = 0 reused + 16058 read in 14447 ms (1111.5 tok/s), 24 generated in 357 ms (67.2 tok/s), drafts accepted 11 of 20
+strata serve: prompt 16058 tokens = 0 reused + 16058 read in 14471 ms (1109.7 tok/s), 24 generated in 376 ms (63.8 tok/s), drafts accepted 11 of 23
+strata serve: prompt 16058 tokens = 0 reused + 16058 read in 14573 ms (1101.9 tok/s), 24 generated in 315 ms (76.3 tok/s), drafts accepted 13 of 19
+strata serve: prompt 609 tokens = 0 reused + 609 read in 1097 ms (555.2 tok/s), 26 generated in 264 ms (98.4 tok/s), drafts accepted 16 of 18
+strata serve: prompt 4058 tokens = 602 reused + 3456 read in 3600 ms (960.0 tok/s), 43 generated in 522 ms (82.3 tok/s), drafts accepted 23 of 30
+strata serve: prompt 5693 tokens = 4051 reused + 1642 read in 2690 ms (610.4 tok/s), 50 generated in 646 ms (77.4 tok/s), drafts accepted 24 of 35
+strata serve: prompt 9110 tokens = 5686 reused + 3424 read in 4368 ms (783.9 tok/s), 45 generated in 502 ms (89.7 tok/s), drafts accepted 24 of 30
+strata serve: prompt 12072 tokens = 9103 reused + 2969 read in 4032 ms (736.3 tok/s), 46 generated in 493 ms (93.2 tok/s), drafts accepted 27 of 33
+strata serve: prompt 15002 tokens = 12065 reused + 2937 read in 4663 ms (629.9 tok/s), 47 generated in 576 ms (81.6 tok/s), drafts accepted 25 of 37
+strata serve: prompt 609 tokens = 0 reused + 609 read in 1094 ms (556.9 tok/s), 26 generated in 230 ms (113.2 tok/s), drafts accepted 16 of 18
+strata serve: prompt 4058 tokens = 602 reused + 3456 read in 3558 ms (971.3 tok/s), 43 generated in 440 ms (97.8 tok/s), drafts accepted 24 of 34
+strata serve: prompt 5693 tokens = 4051 reused + 1642 read in 2692 ms (610.0 tok/s), 50 generated in 529 ms (94.5 tok/s), drafts accepted 27 of 33
+strata serve: prompt 9110 tokens = 5686 reused + 3424 read in 4351 ms (786.9 tok/s), 39 generated in 402 ms (97.0 tok/s), drafts accepted 22 of 27
+strata serve: prompt 12066 tokens = 9103 reused + 2963 read in 4024 ms (736.4 tok/s), 45 generated in 463 ms (97.1 tok/s), drafts accepted 27 of 32
+strata serve: prompt 14995 tokens = 12059 reused + 2936 read in 4639 ms (632.8 tok/s), 49 generated in 668 ms (73.4 tok/s), drafts accepted 24 of 39
+strata serve: prompt 609 tokens = 0 reused + 609 read in 1114 ms (546.6 tok/s), 30 generated in 307 ms (97.9 tok/s), drafts accepted 16 of 23
+strata serve: prompt 4062 tokens = 602 reused + 3460 read in 3775 ms (916.5 tok/s), 43 generated in 437 ms (98.4 tok/s), drafts accepted 24 of 34
+strata serve: prompt 5697 tokens = 4055 reused + 1642 read in 2678 ms (613.1 tok/s), 50 generated in 517 ms (96.6 tok/s), drafts accepted 28 of 35
+strata serve: prompt 9114 tokens = 5690 reused + 3424 read in 4372 ms (783.1 tok/s), 40 generated in 457 ms (87.5 tok/s), drafts accepted 21 of 32
+strata serve: prompt 12071 tokens = 9107 reused + 2964 read in 4025 ms (736.3 tok/s), 44 generated in 488 ms (90.2 tok/s), drafts accepted 25 of 31
+strata serve: prompt 14999 tokens = 12064 reused + 2935 read in 4650 ms (631.2 tok/s), 45 generated in 541 ms (83.2 tok/s), drafts accepted 24 of 33
+strata serve: prompt 32049 tokens = 0 reused + 32049 read in 37326 ms (858.6 tok/s), 24 generated in 388 ms (61.9 tok/s), drafts accepted 12 of 18
+strata serve: prompt 32049 tokens = 0 reused + 32049 read in 37317 ms (858.8 tok/s), 24 generated in 414 ms (58.0 tok/s), drafts accepted 11 of 18
+strata serve: prompt 32049 tokens = 0 reused + 32049 read in 37306 ms (859.1 tok/s), 24 generated in 353 ms (68.0 tok/s), drafts accepted 13 of 16
+strata-poly: 94526 of 298653 prompt tokens were not read again (31.7%); 0 conversations parked in 0 MiB, 0 pushed out; 1013 MiB of VRAM free at the end

@@ -1,0 +1,35 @@
+{
+  "exe": "<installation>/engine-poly/strata-poly",
+  "args": [
+    "--model",
+    "<model-store>/models/qwen36-UD-Q3_K_M/Qwen3.6-35B-A3B-UD-Q3_K_M.gguf",
+    "--kv-whole",
+    "--max-context",
+    "65536",
+    "--expert-profile",
+    "<experiment>/profiles/qwen36-ud-q3_k_m-official.txt",
+    "--conversation-cache-mib",
+    "0",
+    "--threads",
+    "8",
+    "--vram-reserve-mib",
+    "1024"
+  ],
+  "cwd": "<installation>",
+  "tokenizer": "<model-store>/packs/qwen36-ud-q3_k_m/tokenizer",
+  "model_name": "qwen3.6-35b-a3b-ud-q3_k_m",
+  "display_name": "Qwen3.6-35B-A3B UD-Q3_K_M",
+  "log": "<experiment>/qwen36-ud-q3_k_m-official-engine.log",
+  "lib_dirs": [
+    "<venv>/lib/python3.13/site-packages/_rocm_sdk_devel/lib",
+    "<venv>/lib/python3.13/site-packages/_rocm_sdk_libraries_gfx103X_all/lib"
+  ],
+  "port": 8080,
+  "gpu": 0,
+  "gpus_asked": true,
+  "host": "127.0.0.1",
+  "open_browser": false,
+  "api_key": "<redacted>",
+  "reasoning_budget_tokens": 512,
+  "reasoning_effort": "none"
+}
