@@ -96,6 +96,7 @@ struct Options {
     bool graphs = true;           ///< a token's fixed launches are recorded once, a CUDA graph a layer, and replayed
     bool kv_grow = true;          ///< the attention caches get VRAM as the sequence grows, where the card can map it
                                   ///< so; false: for the whole context at load, as the expert cache gets the rest
+    int kv_resident = 0;          ///< attention-cache cells kept resident in VRAM (--kv-resident N); 0 = all of them (default)
 #if defined(STRATA_GPU_METAL)
     KvFmt kv_format = KvFmt::kAuto;   ///< Q8 for compatible Qwen35MoE geometry, otherwise fp16
 #else

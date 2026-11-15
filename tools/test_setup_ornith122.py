@@ -385,6 +385,27 @@ class NonInteractiveInstallFlow(unittest.TestCase):
         self.assertEqual(self.downloads, [])  # Zero downloads when local files are present
         self.assertEqual(len(self.verified_own), 3)  # Shards verified via verify_poly_own
 
+    def test_non_interactive_setup_kv_streaming(self):
+        gguf_dir = self.t / "local_gguf_kv"
+        sub = gguf_dir / "UD-Q3_K_XL"
+        sub.mkdir(parents=True)
+        for i in range(1, 4):
+            (sub / f"Ornith-1.5-122B-UD-Q3_K_XL-0000{i}-of-00003.gguf").write_bytes(b"GGUF")
+        (gguf_dir / "mmproj-F16.gguf").write_bytes(b"MMPROJ")
+
+        code, out, cfg = self.run_setup([
+            "--family", "ornith122",
+            "--model", "UD-Q3_K_XL",
+            "--context", "65536",
+            "--kv-streaming", "on",
+            "--yes", "--no-start",
+            "--gguf-dir", str(gguf_dir),
+        ])
+        self.assertEqual(code, 0, out)
+        self.assertIsNotNone(cfg)
+        self.assertIn("--kv-resident", cfg["args"])
+        self.assertEqual(cfg["args"][cfg["args"].index("--kv-resident") + 1], "32768")
+
 
 if __name__ == "__main__":
     unittest.main()

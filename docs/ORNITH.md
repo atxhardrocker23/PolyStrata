@@ -48,6 +48,9 @@ attention cache is dramatically reduced:
    This takes about 156 MB of RAM per active conversation session on 122B (and about 130 MB on 35B), regardless of context length.
 2. **KV cache**: Full key-value cache rows are stored only for the 13 full attention layers (12 trunk + 1 draft). At fp16,
    one context token takes 26,624 bytes of VRAM on 122B (compared to over 100,000 bytes for a dense 49-layer model of similar width).
+3. **KV streaming (`--kv-resident N`)**: At 256K context, a full KV cache at q8_0 takes ~3.5 GB of VRAM.
+   With `--kv-resident 32768`, only 32K cells (~0.44 GB) stay resident in VRAM while the rest is kept in
+   pinned host RAM, freeing over 3 GB of VRAM for cached experts on 16 GB cards.
 
 ### Mixture-of-Experts (MoE)
 

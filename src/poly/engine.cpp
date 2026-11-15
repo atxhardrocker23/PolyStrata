@@ -1170,7 +1170,8 @@ void* Engine::kv_alloc(size_t bytes, int per) {
 #endif
     void* p = nullptr;
     if (!vmm_ || !opt_.kv_grow) {
-        p = dmalloc(all, "the attention cache");
+        const size_t alloc_rows = opt_.kv_resident > 0 ? (size_t) opt_.kv_resident : (size_t) opt_.max_context;
+        p = dmalloc((size_t) ((alloc_rows + per - 1) / per) * bytes, "the attention cache");
     } else {
         Kv k;
         k.bytes = bytes;
@@ -1303,6 +1304,7 @@ void Engine::cover(int64_t end) {
 #endif
     kv_reach_ = std::max(kv_reach_, end);
     if (kv_.empty() || end <= kv_rows_) return;
+    if (opt_.kv_resident > 0 && kv_rows_ >= opt_.kv_resident) return;
     const int64_t rows = kv_rows_for(end);
     const auto size = [rows](const Kv& k) { return (size_t) ((rows + k.per - 1) / k.per) * k.bytes; };
     size_t more = 0, held = arena_.mapped + other_rows();
@@ -1331,7 +1333,9 @@ void Engine::cover(int64_t end) {
 }
 
 int64_t Engine::kv_rows_for(int64_t end) const {
-    return std::min<int64_t>(opt_.max_context, (end + kKvAhead + kKvGrow - 1) / kKvGrow * kKvGrow);
+    int64_t cap = opt_.max_context;
+    if (opt_.kv_resident > 0) cap = std::min<int64_t>(cap, opt_.kv_resident);
+    return std::min<int64_t>(cap, (end + kKvAhead + kKvGrow - 1) / kKvGrow * kKvGrow);
 }
 
 size_t Engine::trim_kv(int64_t end) {

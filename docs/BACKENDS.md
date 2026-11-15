@@ -116,7 +116,9 @@ and wants about 26 GB of RAM; two cards with layer split hold it all in VRAM. At
 read a 32K prompt at 1,017 tokens/s (first token 32.7 s) and wrote 91; two read it at 2,179 tokens/s
 (first token 15.3 s) and wrote 93, the medians of three runs. It also takes `--kv q8_0`: the attention
 caches as ggml Q8_0 blocks, 544 bytes a row instead of 1,024, the window layers' rings included; fp16 is
-the default and that path is unchanged.
+the default and that path is unchanged. Like Strata, strata-poly also supports `--kv-resident N` (opt-in):
+only N cells stay resident in VRAM while the rest is kept in system RAM, freeing several gigabytes of VRAM
+at long contexts (e.g. 256K on Ornith 1.5 122B) for the expert cache.
 
 A family's first size is the one setup takes. On a PC with less RAM than that wants it takes the second, the
 smallest, and the third is by name: `--model UD-Q4_K_M`, `--model APEX-I-QUALITY`, `--model UD-Q4_K_XL`. The

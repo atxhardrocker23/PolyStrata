@@ -6874,10 +6874,13 @@ def poly_setup(a, family, gpu, hip, cuda_tk, multi, ram, data, elsewhere, port, 
     if sees and hip:   # the image encoder is a CUDA program: no HIP build of it yet (as for the main engine)
         say("  Images: the image encoder is a CUDA program: on the AMD card images are off (text answers).")
         sees = False
+    kv_streaming_supported = family in ("ornith122", "ornith", "qwen36", "tiel")
     unused = [flag for flag, given in (
         ("--vision", not sees and a.vision not in (None, "no", "none")),
         ("--vision-tokens", not sees and a.vision_tokens is not None),
-        ("--kv", a.kv), ("--kv-streaming", a.kv_streaming != "auto"), ("--rope-scaling", a.rope_scaling),
+        ("--kv", a.kv),
+        ("--kv-streaming", not kv_streaming_supported and a.kv_streaming != "auto"),
+        ("--rope-scaling", a.rope_scaling),
         ("--rope-scale", a.rope_scale is not None), ("--low-ram", a.low_ram != "auto"),
         ("--resident-budget-gib", a.resident_budget_gib is not None),
         ("--draft-vocab", a.draft_vocab), ("--layer-split", a.layer_split and not multi), ("--calibrate", a.calibrate),
@@ -7148,6 +7151,11 @@ def poly_setup(a, family, gpu, hip, cuda_tk, multi, ram, data, elsewhere, port, 
            "that much less)")
     if fam.get("tail_skip"):
         args += ["--tail-skip", str(fam["tail_skip"])]
+    if kv_streaming_supported:
+        stream_fits = ram >= (d.get("ram_gb", 32) + 2)
+        if not is_wsl() and ctx >= 65536 and a.kv_streaming != "off" and (stream_fits or a.kv_streaming == "on"):
+            args += ["--kv-resident", "32768"]
+            ok("KV streaming on: the context's KV cache lives in RAM, more experts fit in VRAM (--kv-resident 32768)")
     if not multi and poly_batch(fam, d, vram, ctx):
         args += ["--prompt-batch", "2048"]
         ok("prompts are read 2,048 tokens at a time (--prompt-batch in the config)")
