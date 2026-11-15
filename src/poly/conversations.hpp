@@ -198,6 +198,19 @@ public:
         }
     }
 
+    /// Between requests, when the engine is idle: copy what the current conversation holds only in the engine, up to
+    /// its last checkpoint, to host memory, the way park() keeps a conversation that is leaving - but without cutting
+    /// the conversation: it stays in the engine whole, and a request that goes on from here finds the engine where it
+    /// was.  When another conversation later takes the engine, park() then has only the rows read since to copy.
+    bool pre_park() {
+        Slot& s = cur();
+        if (o_.park_mib < 1 || o_.park_slots < 1 || s.marks.empty() || s.marks.back().pos < o_.park_min) return false;
+        const Clock::time_point t0 = Clock::now();
+        const int64_t end = s.marks.back().pos, from = saved(s);
+        if (from == end) return true;  // nothing to do, no logging
+        return save_rows(cur_, "pre-parked", t0);
+    }
+
     /// The parked conversations, the bytes they hold, and how many were pushed out so far.
     size_t parked() const { return held(slots_.size()).count; }
     size_t parked_bytes() const { return held(slots_.size()).bytes; }
@@ -345,18 +358,27 @@ private:
         const Clock::time_point t0 = Clock::now();
         const int64_t end = s.marks.back().pos, from = saved(s);
         cut(s, end);
+        return save_rows(keep, "parked", t0);
+    }
+
+    // Copies the rows the current conversation still has only in the engine, up to its last checkpoint, to host
+    // memory.  `label` is what say() prints ("parked" or "pre-parked").  Returns true when the rows are in host
+    // memory (or nothing needed saving), false when the guards or the budget said no.
+    bool save_rows(size_t keep, const char* label, Clock::time_point t0) {
+        Slot& s = cur();
+        const int64_t end = s.marks.back().pos, from = saved(s);
         const size_t bytes = (size_t) (end - from) * e_.row_bytes();
-        const BlobPtr b = from < end && fit(bytes, keep) ? blob(bytes) : nullptr;
-        if (from < end && !b) {
-            say("skipped", end, t0, slots_.size());
-            return false;
-        }
-        if (b) {
+        if (from < end) {
+            const BlobPtr b = fit(bytes, keep) ? blob(bytes) : nullptr;
+            if (!b) {
+                say("skipped", end, t0, slots_.size());
+                return false;
+            }
             e_.save_rows(from, end - from, b->data());
             s.rows.push_back({b, from, end - from, end - from});
         }
         if (!fit(0, keep)) return false;
-        say("parked", end, t0, cur_);
+        say(label, end, t0, cur_);
         return true;
     }
 

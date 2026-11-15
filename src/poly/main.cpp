@@ -8,6 +8,7 @@
 #include "conversations.hpp"
 #include "engine.hpp"
 #include "guesses.hpp"
+#include "spill.hpp"
 #include "strata/core/conversation_memory.hpp"
 #include "strata/spec/draft_policy.hpp"
 #include "strata/spec/suffix_drafter.hpp"
@@ -283,6 +284,14 @@ public:
         q_.pop_front();
         return true;
     }
+    /// The next line when one comes before `ms` pass; false when the wait ran out.
+    bool pop_until(std::string& s, long long ms) {
+        std::unique_lock<std::mutex> l(m_);
+        if (!cv_.wait_for(l, std::chrono::milliseconds(ms), [this] { return !q_.empty(); })) return false;
+        s = std::move(q_.front());
+        q_.pop_front();
+        return true;
+    }
     /// The lines waiting that start with `head`, out of the queue, the others left in their order.
     std::vector<std::string> take(const char* head) {
         std::lock_guard<std::mutex> l(m_);
@@ -326,6 +335,7 @@ struct CacheFlags {
     CacheOptions o;
     long long min_free_mib = 2560;   // parking leaves this much physical RAM free
     bool park_auto = false;          // --conversation-cache-mib auto: park_mib from the RAM free once loaded
+    int idle_s = 5;                  // seconds of engine idle before the cache work happens; 0: never
 };
 
 struct Session {
@@ -760,13 +770,32 @@ int serve(Session& ss) {
         piece_t0 = Clock::now();
         return true;
     };
+    // The idle window: after the last request, the cache's work (pre-parking the current conversation) waits
+    // until the engine has been idle for the idle seconds - a request that arrives sooner pays none of it.
+    Clock::time_point idle_t0 = Clock::now();
+    const long long idle_ms = (long long) ss.flags.idle_s * 1000;
+    bool gate_busy = true;
     for (;;) {
         std::string line;
-        if (!writing()) {
-            line = lines.pop();
-        } else if (!lines.try_pop(line)) {
-            if (!step()) return 1;
-            continue;
+        if (writing()) {
+            if (!gate_busy) { strata::poly::SpillGate::instance().busy(); gate_busy = true; }
+            if (!lines.try_pop(line)) {
+                if (!step()) return 1;
+                continue;
+            }
+        } else {
+            if (gate_busy) { strata::poly::SpillGate::instance().idle(); gate_busy = false; }
+            const long long wait = idle_ms - (long long) ms_since(idle_t0);
+            if (wait <= 0) {
+                ss.kept.pre_park();   // no-op when everything is saved already; logs only when it copies
+                idle_t0 = Clock::now();
+                continue;
+            }
+            if (!lines.pop_until(line, wait)) {
+                ss.kept.pre_park();
+                idle_t0 = Clock::now();
+                continue;
+            }
         }
         if (line == "QUIT") break;
         if (line.empty()) continue;
@@ -845,6 +874,20 @@ int serve(Session& ss) {
             std::fflush(stdout);
             continue;
         }
+        // PARK, the server's POST /v1/cache/park: the idle cache work now, with the numbers as the reply
+        if (line.rfind("PARK", 0) == 0 && (line.size() == 4 || line[4] == ' ')) {
+            if (writing()) {
+                std::printf("ERR PARK: not while batch slots are writing\n");
+                std::fflush(stdout);
+                continue;
+            }
+            const Clock::time_point t0 = Clock::now();
+            const bool ok = ss.kept.pre_park();
+            std::printf("PARK ok=%d parked=%zu bytes=%zu ms=%.1f\n", ok ? 1 : 0, ss.kept.parked(),
+                        ss.kept.parked_bytes(), ms_since(t0));
+            std::fflush(stdout);
+            continue;
+        }
         // Disk sessions are the Strata engine's.  Refused in the session protocol's own words: a bare ERR is a
         // reply out of step there, and the server ended this engine for it (issue 114).
         if (line.rfind("SAVE ", 0) == 0 || line.rfind("RESTORE ", 0) == 0) {
@@ -888,6 +931,9 @@ int serve(Session& ss) {
         int64_t resume = 0;
         Session::Result r;
         int32_t first = -1;   // the token BGEN's read picks
+        // A request during the pop_until wait means the idle window is over: the gate is busy again.
+        strata::poly::SpillGate::instance().busy();
+        gate_busy = true;
         try {
             engine.bind(0);
             from_slot(ids);
@@ -982,6 +1028,8 @@ int serve(Session& ss) {
             std::printf("BADM %d %d\n", admit, goes_on ? 1 : 0);
             std::fflush(stdout);
         }
+        // The request is done: the idle window restarts now (heartbeats/BSTOP etc. don't reset it)
+        idle_t0 = Clock::now();
         if (ms_since(saved) >= kProfileSaveMs) {
             try {
                 engine.save_profile();
@@ -1222,8 +1270,11 @@ void usage() {
                  "  --conversation-cache-min-tokens N   a conversation shorter than this is not parked (default 1024)\n"
                  "  --conversation-cache-min-free-mib N park only while this much physical RAM stays free (default\n"
                  "                         2560)\n"
-                 "  --batch N              N answers written together, each in a sequence of its own with its own\n"
-                 "                         state and attention rows (default 0 = one at a time; at most 8);\n"
+                  "  --conversation-cache-idle-s N       the cache work (pre-parking the current conversation, writing\n"
+                  "                         saved rows out) waits until the engine has been idle this long (default\n"
+                  "                         5; 0 = at once, the way it was)\n"
+                  "  --batch N              N answers written together, each in a sequence of its own with its own\n"
+                  "                         state and attention rows (default 0 = one at a time; at most 8);\n"
                  "                         --slots N is the same\n"
                  "  --batch-mtp            with --batch and a draft block: each answer written together guesses its\n"
                  "                         next token and the step checks it, a guess right gives two tokens\n"
@@ -1359,6 +1410,7 @@ int main(int argc, char** argv) {
         else if (a == "--conversation-cache-slots") cache.o.park_slots = std::atoi(val());
         else if (a == "--conversation-cache-min-tokens") cache.o.park_min = std::atoll(val());
         else if (a == "--conversation-cache-min-free-mib") cache.min_free_mib = std::atoll(val());
+        else if (a == "--conversation-cache-idle-s") cache.idle_s = std::atoi(val());
         else if (a == "--dump-layers") o.dump = true;
         else if (a == "--images") images = val();
         else if (a == "--image-pad") image_pad = std::atoi(val());
@@ -1469,6 +1521,8 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "strata-poly: conversation cache off: not enough free RAM to park conversations "
                                      "(--conversation-cache-mib N asks for one anyway)\n");
         }
+        if (cache.idle_s < 0) cache.idle_s = 0;
+        strata::poly::SpillGate::instance().idle_seconds(cache.idle_s);
         Session ss(engine, eos, cache, lookup);
         int rc = 0;
         if (want_serve) {

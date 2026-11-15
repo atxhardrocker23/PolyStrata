@@ -6272,3 +6272,62 @@ class PrepareCancelled(unittest.TestCase):
             ids, _, _ = svc.prepare(self.msgs(), None, {}, cancel=threading.Event())
             self.assertEqual(ids.count(ByteTokenizer().encode("<|image_pad|>", parse_special=True)[0]), 6)
             svc.embeddings.path.unlink(missing_ok=True)
+
+
+class ConversationCachePark(unittest.TestCase):
+    """POST /v1/cache/park: the conversation cache's idle work, now (between requests)."""
+
+    @classmethod
+    def setUpClass(cls):
+        tok = ByteTokenizer()
+        cls.svc = Service(MockEngine(tok, "</think>\n\nok", max_context=CTX), tok,
+                          ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        cls.httpd = serve(cls.svc, port=0)
+        cls.base = f"http://127.0.0.1:{cls.httpd.server_address[1]}"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+
+    def request(self, path, body=None):
+        req = urllib.request.Request(self.base + path, data=None if body is None else json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status, r.read()
+
+    def test_park_endpoint_loaded(self):
+        """POST /v1/cache/park when loaded -> 200 with engine figures."""
+        status, raw = self.request("/v1/cache/park", {})
+        self.assertEqual(status, 200)
+        data = json.loads(raw)
+        self.assertEqual(data["status"], "parked")
+        self.assertIn("parked", data)
+        self.assertIn("bytes", data)
+        self.assertIn("ms", data)
+
+    def test_park_endpoint_not_loaded(self):
+        """POST /v1/cache/park when not loaded -> 200 {"status": "not loaded"}."""
+        self.svc.engine.alive = lambda: False   # the engine reports not running: nothing to park
+        try:
+            status, raw = self.request("/v1/cache/park", {})
+        finally:
+            del self.svc.engine.alive
+        self.assertEqual(status, 200)
+        data = json.loads(raw)
+        self.assertEqual(data["status"], "not loaded")
+        self.assertIn("note", data)
+
+
+class MockEnginePark(unittest.TestCase):
+    """MockEngine.park() returns a dict with the expected keys."""
+
+    def test_park_returns_expected_keys(self):
+        eng = MockEngine(ByteTokenizer(), "ok", max_context=CTX)
+        out = eng.park()
+        self.assertIn("ok", out)
+        self.assertIn("parked", out)
+        self.assertIn("bytes", out)
+        self.assertIn("ms", out)
+
+

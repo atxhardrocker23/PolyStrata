@@ -207,6 +207,7 @@ void Spill::write() const {
         const int n = std::atoi(v);
         if (n != 0) return;
     }
+    SpillGate::instance().wait_for_idle();
     const intptr_t f = make_file();
     const bool ok = f != -1 && write_all(f, heap_, n_);
     std::lock_guard<std::mutex> l(m_);
@@ -242,6 +243,52 @@ void Spill::drop() const {
     madvise(view_, (n_ + page - 1) / page * page, MADV_DONTNEED);   // they stay in the file cache
 #endif
     cold_ = true;
+}
+
+void SpillGate::idle_seconds(int s) {
+    idle_seconds_.store(s, std::memory_order_relaxed);
+}
+
+void SpillGate::busy() {
+    busy_.store(true, std::memory_order_release);
+}
+
+void SpillGate::idle() {
+    idle_since_.store(std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::steady_clock::now().time_since_epoch())
+                          .count(),
+                      std::memory_order_release);
+    busy_.store(false, std::memory_order_release);
+}
+
+bool SpillGate::wait_for_idle(const std::function<bool()>& probe,
+                              const std::function<bool()>& condition) const {
+    for (;;) {
+        if (probe) {
+            if (probe()) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+        if (idle_seconds_.load(std::memory_order_relaxed) == 0) return true;
+        if (condition) {
+            if (condition()) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+        if (!busy_.load(std::memory_order_acquire) &&
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+                    .count() -
+                idle_since_.load(std::memory_order_acquire) >=
+            idle_seconds_.load(std::memory_order_relaxed) * 1000LL) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+}
+
+SpillGate& SpillGate::instance() {
+    static SpillGate g;
+    return g;
 }
 
 }  // namespace strata::poly

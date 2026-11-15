@@ -330,6 +330,11 @@ class MockEngine:
             yield t
 
 
+    def park(self, timeout: float = 120.0) -> dict:
+        """MockEngine: the park reply the StrataEngine would write to its stdout."""
+        return {"ok": 1, "parked": 1, "bytes": 81234, "ms": 12.3}
+
+
 class EngineDied(RuntimeError):
     """The engine process ended in the middle of a request (issue #27: on Linux, the out-of-memory killer)."""
 
@@ -1216,6 +1221,35 @@ class StrataEngine:
                 return out
             if time.time() > deadline:
                 raise EngineDied("the engine did not answer the VRAM command")
+
+    def park(self, timeout: float = 120.0) -> dict:
+        """`PARK` between requests (the caller holds the service's FIFO): the conversation cache saves what the
+        current conversation holds to host memory now, the idle work made immediate.  -> the engine's figures
+        (parked, bytes, ms); raises ValueError with the engine's reason, EngineDied when it ended."""
+        if not self.alive():
+            raise EngineDied("the engine is not running")
+        self.proc.stdin.write("PARK\n")
+        self.proc.stdin.flush()
+        deadline = time.time() + timeout
+        while True:
+            try:
+                line = self.lines.get(timeout=max(0.1, deadline - time.time()))
+            except queue.Empty:
+                raise EngineDied("the engine did not answer the PARK command") from None
+            if line is None:
+                raise EngineDied("the engine ended")
+            line = line.strip()
+            if line.startswith("ERR"):
+                raise ValueError(line[4:].strip() or "the engine refused the PARK command")
+            if line.startswith("PARK "):
+                out = {}
+                for kv in line.split()[1:]:
+                    k, _, v = kv.partition("=")
+                    out[k] = int(v) if v.lstrip("-").isdigit() else v
+                return out
+            if time.time() > deadline:
+                raise EngineDied("the engine did not answer the PARK command")
+
 
     @staticmethod
     def sampling_keys(sampling: dict) -> str:
@@ -4002,6 +4036,7 @@ class Service:
                 print(f"[strata] the VRAM reserve ({self.vram_reserve} MiB) was not applied: {e}", flush=True)
 
     vram_wait_s = 300.0                                  # #533: how long POST /v1/vram waits for a running request
+    park_wait_s = 300.0                         # how long POST /v1/cache/park waits for a running request
 
     def vram(self, reserve_mib: int | None) -> dict:
         """#533, POST /v1/vram: keep `reserve_mib` of VRAM free for other programs (None: the reserve the engine
@@ -4033,6 +4068,29 @@ class Service:
             if ctl is not None:
                 ctl.release()
             self.fifo.release()
+
+    def park(self) -> dict:
+        """POST /v1/cache/park: the conversation cache's idle work (saving the current conversation's rows to
+        host memory) now, between requests - a request that is running finishes first (up to park_wait_s).
+        -> {"status": ... and the engine's figures}."""
+        if not hasattr(self.engine, "park"):
+            raise ValueError("this engine cannot park its conversation cache")
+        if not self.fifo.acquire(timeout=self.park_wait_s):
+            raise ModelBusy("a request is still running; try again when it has finished")
+        ctl = getattr(self.engine, "ctl", None) if getattr(self.engine, "batch", 0) else None
+        if ctl is not None and not ctl.acquire(timeout=self.park_wait_s):
+            self.fifo.release()
+            raise ModelBusy("a request is still running; try again when it has finished")
+        try:
+            if not self.loaded():
+                return {"status": "not loaded", "note": "nothing to park"}
+            out = self.engine.park()
+            return {"status": "parked", **out}
+        finally:
+            if ctl is not None:
+                ctl.release()
+            self.fifo.release()
+
 
     def _say_died(self, e: Exception) -> None:
         """The server window's line for an engine that died (or was ended, #481) in the middle of a request."""
@@ -6284,6 +6342,15 @@ def make_handler(svc: Service):
                     except EngineDied as e:
                         self._json(503, {"error": {"type": "server_error", "message": str(e)}})
                     return
+                if path == "/v1/cache/park":                 # the conversation cache's idle work, now
+                    if not self._own_page("the conversation cache can be parked"):
+                        return
+                    try:
+                        self._json(200, svc.park())
+                    except EngineDied as e:
+                        self._json(503, {"error": {"type": "server_error", "message": str(e)}})
+                    return
+
                 if path in ("/v1/chat/completions", "/v1/messages", "/v1/responses"):
                     self.record = svc.begin_request(path, req)
                     # #38: the request holds its model to its end (no switch comes between its prompt and its answer);
