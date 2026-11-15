@@ -73,6 +73,9 @@ class Engine:
         scfg = json.load(open(self.m["strata_cfg"], encoding="utf-8-sig"))
         scfg["port"] = PORT
         scfg.pop("vision", None)
+        # The server binds 127.0.0.1 here and chat() sends no key: an install's "api_key" would answer every request
+        # with 401. Leaving it out also keeps the key out of strata-cfg-<name>.json in the results folder.
+        scfg.pop("api_key", None)
         args = [a for a in scfg["args"]]
         for k, v in c.get("override", {}).items():          # replace "--flag value" pairs
             if k in args:
